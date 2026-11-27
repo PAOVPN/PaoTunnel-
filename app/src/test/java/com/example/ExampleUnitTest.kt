@@ -175,7 +175,13 @@ class ExampleUnitTest {
     assertEquals("SSH • Protected Config", decrypted.homeDisplaySubtitle)
     assertEquals(encryptedLink, decrypted.rawUri)
 
-    // Verify AES-GCM integrity check rejects tampered links
+    // Verify AES-GCM integrity check rejects tampered links (both mid-ciphertext and trailing)
+    val midIdx = encryptedLink.length / 2
+    val midChar = encryptedLink[midIdx]
+    val tamperedMidChar = if (midChar == 'A') 'B' else 'A'
+    val tamperedMidLink = encryptedLink.substring(0, midIdx) + tamperedMidChar + encryptedLink.substring(midIdx + 1)
+    assertEquals(null, com.example.vpn.crypto.ConfigCrypto.decryptLinkToServer(tamperedMidLink))
+
     val lastChar = encryptedLink.last()
     val tamperedChar = if (lastChar == 'A') 'B' else 'A'
     val tamperedLink = encryptedLink.dropLast(1) + tamperedChar
@@ -194,5 +200,62 @@ class ExampleUnitTest {
         uuid = "11111111-2222-3333-4444-555555555555",
       )
     assertEquals("V2Ray • Protected", vlessServer.homeDisplaySubtitle)
+  }
+
+  @Test
+  fun slowDns_commandBuilderAndAesLockPreserveAllFieldsAndMaskSubtitle() {
+    val pubKey = "a".repeat(64)
+    val slowDnsServer =
+      com.example.vpn.model.VpnServer(
+        id = "sd-1",
+        name = "MM SlowDNS",
+        protocol = com.example.vpn.model.VpnProtocol.SSH,
+        address = "127.0.0.1",
+        port = 22,
+        username = "pao_dns_user",
+        password = "dns_secret_pw",
+        sshTunnelMode = com.example.vpn.model.SshTunnelMode.SLOW_DNS,
+        slowDnsServerIp = "1.1.1.1",
+        slowDnsNameserver = "://ns1.example.com",
+        slowDnsPublicKey = pubKey,
+        isCustom = true,
+      )
+
+    assertTrue(slowDnsServer.isSlowDns)
+    assertEquals("SlowDNS • Protected Config", slowDnsServer.homeDisplaySubtitle)
+
+    val cmd =
+      com.example.vpn.ssh.SlowDnsManager.buildCommand(
+        "/data/app/lib/arm64/libdnstt.so",
+        slowDnsServer,
+      )
+    assertEquals(
+      listOf(
+        "/data/app/lib/arm64/libdnstt.so",
+        "-udp",
+        "1.1.1.1:53",
+        "-pubkey",
+        pubKey,
+        "ns1.example.com",
+        "127.0.0.1:7000",
+      ),
+      cmd,
+    )
+
+    val lockedLink = com.example.vpn.crypto.ConfigCrypto.encryptServerToLink(slowDnsServer)
+    assertTrue(lockedLink.startsWith("paolock://"))
+    assertTrue(!lockedLink.contains("1.1.1.1"))
+    assertTrue(!lockedLink.contains("ns1.example.com"))
+    assertTrue(!lockedLink.contains(pubKey))
+    assertTrue(!lockedLink.contains("pao_dns_user"))
+
+    val decrypted = com.example.vpn.crypto.ConfigCrypto.decryptLinkToServer(lockedLink)!!
+    assertTrue(decrypted.isLocked)
+    assertTrue(decrypted.isSlowDns)
+    assertEquals(com.example.vpn.model.SshTunnelMode.SLOW_DNS, decrypted.sshTunnelMode)
+    assertEquals("1.1.1.1", decrypted.slowDnsServerIp)
+    assertEquals("://ns1.example.com", decrypted.slowDnsNameserver)
+    assertEquals(pubKey, decrypted.slowDnsPublicKey)
+    assertEquals("SlowDNS • Protected Config", decrypted.homeDisplaySubtitle)
   }
 }

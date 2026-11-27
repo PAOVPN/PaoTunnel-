@@ -1,5 +1,6 @@
 package com.example.vpn.crypto
 
+import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import java.nio.charset.StandardCharsets
@@ -116,6 +117,10 @@ object ConfigCrypto {
         "payload" to server.payload,
         "sshProxyHost" to server.sshProxyHost,
         "sshProxyPort" to server.sshProxyPort.toString(),
+        "sshTunnelMode" to server.sshTunnelMode.name,
+        "slowDnsServerIp" to server.slowDnsServerIp,
+        "slowDnsNameserver" to server.slowDnsNameserver,
+        "slowDnsPublicKey" to server.slowDnsPublicKey,
       )
     return fields.joinToString("\n") { (k, v) ->
       "$k:${encodeBase64Url(v.toByteArray(StandardCharsets.UTF_8))}"
@@ -188,6 +193,12 @@ object ConfigCrypto {
       payload = map["payload"].orEmpty(),
       sshProxyHost = map["sshProxyHost"].orEmpty(),
       sshProxyPort = map["sshProxyPort"]?.toIntOrNull() ?: 0,
+      sshTunnelMode =
+        runCatching { SshTunnelMode.valueOf(map["sshTunnelMode"].orEmpty()) }
+          .getOrDefault(SshTunnelMode.DIRECT_PAYLOAD),
+      slowDnsServerIp = map["slowDnsServerIp"].orEmpty(),
+      slowDnsNameserver = map["slowDnsNameserver"].orEmpty(),
+      slowDnsPublicKey = map["slowDnsPublicKey"].orEmpty(),
       rawUri = rawLockedUri,
       isCustom = isCustom,
       isLocked = true,
@@ -238,9 +249,13 @@ object ConfigCrypto {
       out[outIdx++] = ((c0 shl 2) or (c1 ushr 4)).toByte()
       if (hasC2 && outIdx < outLen) {
         out[outIdx++] = (((c1 and 0x0F) shl 4) or (c2 ushr 2)).toByte()
+      } else if (!hasC2 && (c1 and 0x0F) != 0) {
+        return null
       }
       if (hasC3 && outIdx < outLen) {
         out[outIdx++] = (((c2 and 0x03) shl 6) or c3).toByte()
+      } else if (hasC2 && !hasC3 && (c2 and 0x03) != 0) {
+        return null
       }
       i += 4
     }

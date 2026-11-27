@@ -129,8 +129,9 @@ fun ExportConfigDialog(
               overflow = TextOverflow.Ellipsis,
             )
             Spacer(modifier = Modifier.height(2.dp))
+            val modeLabel = if (server.isSlowDns) "SlowDNS" else server.protocol.displayName
             Text(
-              text = "${server.protocol.displayName} • ${if (lockConfig) "AES-256 Protected" else "Standard Config"}",
+              text = "$modeLabel • ${if (lockConfig) "AES-256 Protected" else "Standard Config"}",
               style = MaterialTheme.typography.labelSmall,
               color = if (lockConfig) AmberConnecting else TextSecondary,
             )

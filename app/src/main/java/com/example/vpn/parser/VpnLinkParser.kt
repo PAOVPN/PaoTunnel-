@@ -2,6 +2,7 @@ package com.example.vpn.parser
 
 import android.util.Base64
 import com.example.vpn.crypto.ConfigCrypto
+import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import java.net.URLDecoder
@@ -173,24 +174,43 @@ object VpnLinkParser {
       val proxyString =
         firstNonBlank(obj.optString("proxy"), obj.optString("httpProxy"), obj.optString("remoteProxy"))
       val (proxyHost, proxyPort) = parseProxyHostPort(proxyString, obj.optString("proxyHost"), obj.optInt("proxyPort", 0))
-      if (host.isEmpty() || port <= 0 || username.isEmpty()) return null
+      val slowDnsIp =
+        firstNonBlank(obj.optString("dns"), obj.optString("dnsServer"), obj.optString("slowDnsServerIp"))
+      val slowDnsNs =
+        firstNonBlank(obj.optString("ns"), obj.optString("nameserver"), obj.optString("nsDomain"), obj.optString("slowDnsNameserver"))
+      val slowDnsKey =
+        firstNonBlank(obj.optString("pubkey"), obj.optString("publicKey"), obj.optString("slowDnsPublicKey"))
+      val modeStr =
+        firstNonBlank(obj.optString("tunnelMode"), obj.optString("sshTunnelMode"), obj.optString("mode")).lowercase()
+      val tunnelMode =
+        if (modeStr.contains("slowdns") || modeStr == "dnstt" || (slowDnsNs.isNotEmpty() && slowDnsKey.isNotEmpty())) {
+          SshTunnelMode.SLOW_DNS
+        } else {
+          SshTunnelMode.DIRECT_PAYLOAD
+        }
+      if (username.isEmpty() || (tunnelMode != SshTunnelMode.SLOW_DNS && (host.isEmpty() || port <= 0))) return null
       val flag = obj.optString("flag").trim()
       val displayName =
         when {
           overrideName.isNotEmpty() && flag.isNotEmpty() && !overrideName.contains(flag) ->
             "$flag $overrideName"
           overrideName.isNotEmpty() -> overrideName
+          tunnelMode == SshTunnelMode.SLOW_DNS -> "SlowDNS · ${slowDnsNs.ifBlank { host }}"
           else -> "SSH · $host:$port"
         }
       return createSshServer(
         name = displayName,
-        host = host,
-        port = port,
+        host = host.ifBlank { "127.0.0.1" },
+        port = if (port > 0) port else 22,
         username = username,
         password = password,
         payload = rawPayload,
         sshProxyHost = proxyHost,
         sshProxyPort = proxyPort,
+        sshTunnelMode = tunnelMode,
+        slowDnsServerIp = slowDnsIp,
+        slowDnsNameserver = slowDnsNs,
+        slowDnsPublicKey = slowDnsKey,
         isCustom = false,
       )
     }
@@ -302,6 +322,10 @@ object VpnLinkParser {
     }
   }
 
+  fun sanitizeSlowDnsNameserver(raw: String): String {
+    return raw.trim().removePrefix("://").trim()
+  }
+
   fun createSshServer(
     name: String,
     host: String,
@@ -311,29 +335,59 @@ object VpnLinkParser {
     payload: String,
     sshProxyHost: String = "",
     sshProxyPort: Int = 0,
+    sshTunnelMode: SshTunnelMode = SshTunnelMode.DIRECT_PAYLOAD,
+    slowDnsServerIp: String = "",
+    slowDnsNameserver: String = "",
+    slowDnsPublicKey: String = "",
     isCustom: Boolean = true,
   ): VpnServer {
-    val cleanHost = host.trim()
+    val cleanHost = host.trim().ifBlank { if (sshTunnelMode == SshTunnelMode.SLOW_DNS) "127.0.0.1" else "" }
+    val cleanPort = if (port in 1..65535) port else 22
     val cleanUser = username.trim()
-    val cleanPayload = payload.trim()
-    val cleanProxyHost = sshProxyHost.trim()
+    val cleanPayload = if (sshTunnelMode == SshTunnelMode.SLOW_DNS) "" else payload.trim()
+    val cleanProxyHost = if (sshTunnelMode == SshTunnelMode.SLOW_DNS) "" else sshProxyHost.trim()
     val cleanProxyPort = if (cleanProxyHost.isNotEmpty() && sshProxyPort in 1..65535) sshProxyPort else 0
-    val displayName = name.trim().ifBlank { "SSH · $cleanHost:$port" }
-    val id = stableId("SSH|$cleanHost|$port|$cleanUser|$cleanProxyHost:$cleanProxyPort|$cleanPayload")
+    val cleanDnsIp = slowDnsServerIp.trim()
+    val cleanNs = sanitizeSlowDnsNameserver(slowDnsNameserver)
+    val cleanPubkey = slowDnsPublicKey.trim().lowercase()
+    val displayName =
+      name.trim().ifBlank {
+        if (sshTunnelMode == SshTunnelMode.SLOW_DNS) {
+          "SlowDNS · ${cleanNs.ifBlank { cleanHost }}"
+        } else {
+          "SSH · $cleanHost:$cleanPort"
+        }
+      }
+    val idSeed =
+      if (sshTunnelMode == SshTunnelMode.SLOW_DNS) {
+        "SLOWDNS|$cleanHost|$cleanPort|$cleanUser|$cleanDnsIp|$cleanNs|$cleanPubkey"
+      } else {
+        "SSH|$cleanHost|$cleanPort|$cleanUser|$cleanProxyHost:$cleanProxyPort|$cleanPayload"
+      }
+    val id = stableId(idSeed)
     val server =
       VpnServer(
         id = id,
         name = displayName,
         protocol = VpnProtocol.SSH,
         address = cleanHost,
-        port = port,
-        network = "ssh",
-        tlsMode = if (cleanPayload.isNotEmpty()) "payload" else "none",
+        port = cleanPort,
+        network = if (sshTunnelMode == SshTunnelMode.SLOW_DNS) "slowdns" else "ssh",
+        tlsMode =
+          when {
+            sshTunnelMode == SshTunnelMode.SLOW_DNS -> "dnstt"
+            cleanPayload.isNotEmpty() -> "payload"
+            else -> "none"
+          },
         username = cleanUser,
         password = password,
         payload = cleanPayload,
         sshProxyHost = cleanProxyHost,
         sshProxyPort = cleanProxyPort,
+        sshTunnelMode = sshTunnelMode,
+        slowDnsServerIp = cleanDnsIp,
+        slowDnsNameserver = cleanNs,
+        slowDnsPublicKey = cleanPubkey,
         isCustom = isCustom,
       )
     return server.copy(rawUri = toSshUri(server))
@@ -349,17 +403,30 @@ object VpnLinkParser {
         server.address.trim()
       }
     val queryParts = mutableListOf<String>()
-    if (server.sshProxyHost.isNotBlank() && server.sshProxyPort in 1..65535) {
-      val proxyHostPort = "${server.sshProxyHost.trim()}:${server.sshProxyPort}"
-      queryParts.add("proxy=${urlEncode(proxyHostPort)}")
-    }
-    if (server.payload.isNotBlank()) {
-      val encodedPayload =
-        Base64.encodeToString(
-          server.payload.toByteArray(StandardCharsets.UTF_8),
-          Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-        )
-      queryParts.add("payload=$encodedPayload")
+    if (server.sshTunnelMode == SshTunnelMode.SLOW_DNS) {
+      queryParts.add("mode=slowdns")
+      if (server.slowDnsServerIp.isNotBlank()) {
+        queryParts.add("dns=${urlEncode(server.slowDnsServerIp.trim())}")
+      }
+      if (server.slowDnsNameserver.isNotBlank()) {
+        queryParts.add("ns=${urlEncode(server.slowDnsNameserver.trim())}")
+      }
+      if (server.slowDnsPublicKey.isNotBlank()) {
+        queryParts.add("pubkey=${urlEncode(server.slowDnsPublicKey.trim())}")
+      }
+    } else {
+      if (server.sshProxyHost.isNotBlank() && server.sshProxyPort in 1..65535) {
+        val proxyHostPort = "${server.sshProxyHost.trim()}:${server.sshProxyPort}"
+        queryParts.add("proxy=${urlEncode(proxyHostPort)}")
+      }
+      if (server.payload.isNotBlank()) {
+        val encodedPayload =
+          Base64.encodeToString(
+            server.payload.toByteArray(StandardCharsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+          )
+        queryParts.add("payload=$encodedPayload")
+      }
     }
     val querySuffix = if (queryParts.isNotEmpty()) "?${queryParts.joinToString("&")}" else ""
     val remarkSuffix = if (server.name.isNotBlank()) "#${urlEncode(server.name)}" else ""
@@ -505,6 +572,16 @@ object VpnLinkParser {
     val (proxyHost, proxyPort) = parseProxyHostPort(rawProxyParam, "", 0)
     val rawPayloadParam = params["payload"].orEmpty()
     val decodedPayload = decodeBase64PayloadSafely(rawPayloadParam)
+    val dnsParam = params["dns"] ?: params["dnsServer"] ?: ""
+    val nsParam = params["ns"] ?: params["nameserver"] ?: ""
+    val pubkeyParam = params["pubkey"] ?: params["publicKey"] ?: ""
+    val modeParam = (params["mode"] ?: "").lowercase()
+    val tunnelMode =
+      if (modeParam == "slowdns" || modeParam == "dnstt" || (nsParam.isNotBlank() && pubkeyParam.isNotBlank())) {
+        SshTunnelMode.SLOW_DNS
+      } else {
+        SshTunnelMode.DIRECT_PAYLOAD
+      }
 
     val server =
       createSshServer(
@@ -516,6 +593,10 @@ object VpnLinkParser {
         payload = decodedPayload,
         sshProxyHost = proxyHost,
         sshProxyPort = proxyPort,
+        sshTunnelMode = tunnelMode,
+        slowDnsServerIp = dnsParam,
+        slowDnsNameserver = nsParam,
+        slowDnsPublicKey = pubkeyParam,
         isCustom = isCustom,
       )
     return server.copy(rawUri = uri)
@@ -763,6 +844,10 @@ object VpnLinkParser {
           put("payload", s.payload)
           put("sshProxyHost", s.sshProxyHost)
           put("sshProxyPort", s.sshProxyPort)
+          put("sshTunnelMode", s.sshTunnelMode.name)
+          put("slowDnsServerIp", s.slowDnsServerIp)
+          put("slowDnsNameserver", s.slowDnsNameserver)
+          put("slowDnsPublicKey", s.slowDnsPublicKey)
           put("rawUri", if (s.isLocked && !ConfigCrypto.isLockedUri(s.rawUri)) "" else s.rawUri)
           put("isCustom", s.isCustom)
           put("isLocked", s.isLocked)
@@ -785,6 +870,9 @@ object VpnLinkParser {
                 .getOrNull() ?: continue
             val locked = o.optBoolean("isLocked", false)
             val storedRawUri = o.optString("rawUri", "")
+            val tunnelMode =
+              runCatching { SshTunnelMode.valueOf(o.optString("sshTunnelMode")) }
+                .getOrDefault(SshTunnelMode.DIRECT_PAYLOAD)
             add(
               VpnServer(
                 id = o.optString("id"),
@@ -816,6 +904,10 @@ object VpnLinkParser {
                 payload = o.optString("payload", ""),
                 sshProxyHost = o.optString("sshProxyHost", ""),
                 sshProxyPort = o.optInt("sshProxyPort", 0),
+                sshTunnelMode = tunnelMode,
+                slowDnsServerIp = o.optString("slowDnsServerIp", ""),
+                slowDnsNameserver = o.optString("slowDnsNameserver", ""),
+                slowDnsPublicKey = o.optString("slowDnsPublicKey", ""),
                 rawUri = if (locked && !ConfigCrypto.isLockedUri(storedRawUri)) "" else storedRawUri,
                 isCustom = o.optBoolean("isCustom", false),
                 isLocked = locked,

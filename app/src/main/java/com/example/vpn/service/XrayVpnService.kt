@@ -21,6 +21,7 @@ import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import com.example.vpn.parser.VpnLinkParser
 import com.example.vpn.parser.XrayConfigBuilder
+import com.example.vpn.ssh.SlowDnsManager
 import com.example.vpn.ssh.SshTunnelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -104,6 +105,7 @@ class XrayVpnService : VpnService() {
         runCatching {
             XrayCoreAdapterImpl.stop()
             SshTunnelManager.stop()
+            SlowDnsManager.stop()
             runCatching { vpnInterface?.close() }
             vpnInterface = null
 
@@ -122,7 +124,11 @@ class XrayVpnService : VpnService() {
             XrayCoreAdapterImpl.initCoreEnv(filesDir.absolutePath)
 
             val isSsh = server.protocol == VpnProtocol.SSH
+            val isSlowDns = server.isSlowDns
             if (isSsh) {
+              if (isSlowDns) {
+                SlowDnsManager.start(applicationContext, server).getOrThrow()
+              }
               SshTunnelManager.start(server, SshTunnelManager.DEFAULT_LOCAL_SOCKS_PORT)
                 .getOrThrow()
             }
@@ -165,7 +171,7 @@ class XrayVpnService : VpnService() {
                         connectedAtElapsedMs = SystemClock.elapsedRealtime(),
                       )
                       startForegroundNotification(server.name, connecting = false)
-                      startTrafficPolling(isSsh)
+                      startTrafficPolling(isSsh, isSlowDns)
                     }
 
                     override fun onCoreStopped() {
@@ -189,7 +195,7 @@ class XrayVpnService : VpnService() {
                 connectedAtElapsedMs = SystemClock.elapsedRealtime(),
               )
               startForegroundNotification(server.name, connecting = false)
-              startTrafficPolling(isSsh)
+              startTrafficPolling(isSsh, isSlowDns)
             }
           }
           .onFailure { error ->
@@ -197,6 +203,7 @@ class XrayVpnService : VpnService() {
             vpnInterface = null
             XrayCoreAdapterImpl.stop()
             SshTunnelManager.stop()
+            SlowDnsManager.stop()
             VpnStateHolder.setDisconnected(error.message ?: "Failed to start VPN tunnel.")
             stopForegroundCompat()
             stopSelf()
@@ -204,11 +211,16 @@ class XrayVpnService : VpnService() {
       }
   }
 
-  private fun startTrafficPolling(isSsh: Boolean) {
+  private fun startTrafficPolling(isSsh: Boolean, isSlowDns: Boolean) {
     statsJob?.cancel()
     statsJob =
       serviceScope.launch {
-        while (isActive && XrayCoreAdapterImpl.isRunning && (!isSsh || SshTunnelManager.isRunning)) {
+        while (
+          isActive &&
+            XrayCoreAdapterImpl.isRunning &&
+            (!isSsh || SshTunnelManager.isRunning) &&
+            (!isSlowDns || SlowDnsManager.isRunning)
+        ) {
           val (up, down) =
             if (isSsh) {
               SshTunnelManager.queryTrafficDelta()
@@ -218,7 +230,7 @@ class XrayVpnService : VpnService() {
           VpnStateHolder.updateTrafficStats(up, down)
           delay(1000L)
         }
-        if (isActive && isSsh && !SshTunnelManager.isRunning) {
+        if (isActive && ((isSsh && !SshTunnelManager.isRunning) || (isSlowDns && !SlowDnsManager.isRunning))) {
           disconnectAndStop()
         }
       }
@@ -231,6 +243,7 @@ class XrayVpnService : VpnService() {
     serviceScope.launch {
       XrayCoreAdapterImpl.stop()
       SshTunnelManager.stop()
+      SlowDnsManager.stop()
       runCatching { vpnInterface?.close() }
       vpnInterface = null
       VpnStateHolder.setDisconnected(null)
@@ -249,6 +262,7 @@ class XrayVpnService : VpnService() {
     coreJob?.cancel()
     XrayCoreAdapterImpl.stop()
     SshTunnelManager.stop()
+    SlowDnsManager.stop()
     runCatching { vpnInterface?.close() }
     vpnInterface = null
     serviceScope.cancel()

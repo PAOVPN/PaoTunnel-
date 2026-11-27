@@ -50,22 +50,28 @@ object SshTunnelManager {
       lastReportedDownlink = 0L
 
       val jsch = JSch()
-      val sshSession = jsch.getSession(server.username, server.address.trim(), server.port)
+      val isSlowDns = server.isSlowDns
+      val targetHost = if (isSlowDns) SlowDnsManager.LOCAL_LISTEN_HOST else server.address.trim()
+      val targetPort = if (isSlowDns) SlowDnsManager.LOCAL_LISTEN_PORT else server.port
+      val sshSession = jsch.getSession(server.username, targetHost, targetPort)
       sshSession.setPassword(server.password)
       sshSession.setConfig("StrictHostKeyChecking", "no")
       sshSession.setConfig("PreferredAuthentications", "password,keyboard-interactive")
       sshSession.userInfo = PasswordUserInfo(server.password)
-      sshSession.setSocketFactory(
-        PayloadSocketFactory(
-          rawPayload = server.payload,
-          proxyHost = server.sshProxyHost,
-          proxyPort = server.sshProxyPort,
+      if (!isSlowDns) {
+        sshSession.setSocketFactory(
+          PayloadSocketFactory(
+            rawPayload = server.payload,
+            proxyHost = server.sshProxyHost,
+            proxyPort = server.sshProxyPort,
+          )
         )
-      )
-      sshSession.setTimeout(20_000)
+      }
+      val timeoutMs = if (isSlowDns) 30_000 else 20_000
+      sshSession.setTimeout(timeoutMs)
       sshSession.setServerAliveInterval(15_000)
       sshSession.setServerAliveCountMax(3)
-      sshSession.connect(20_000)
+      sshSession.connect(timeoutMs)
 
       val boundSocket =
         ServerSocket(localSocksPort, 128, InetAddress.getByName("127.0.0.1")).apply {

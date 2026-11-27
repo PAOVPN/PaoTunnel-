@@ -6,6 +6,7 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.vpn.data.ServerRepository
+import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.VpnConnectionState
 import com.example.vpn.model.VpnRuntimeState
 import com.example.vpn.model.VpnServer
@@ -192,6 +193,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     password: String,
     payload: String,
     httpProxy: String,
+    sshTunnelMode: SshTunnelMode,
+    slowDnsServerIp: String,
+    slowDnsNameserver: String,
+    slowDnsPublicKey: String,
     editingServerId: String?,
   ) {
     viewModelScope.launch {
@@ -204,25 +209,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           password = password,
           payload = payload,
           httpProxy = httpProxy,
+          sshTunnelMode = sshTunnelMode,
+          slowDnsServerIp = slowDnsServerIp,
+          slowDnsNameserver = slowDnsNameserver,
+          slowDnsPublicKey = slowDnsPublicKey,
           editingServerId = editingServerId,
         )
         .onSuccess { server ->
+          val label = if (server.isSlowDns) "SlowDNS" else "SSH"
           transientState.update {
             it.copy(
               showImportDialog = false,
               editingServer = null,
               statusBannerMessage =
                 if (editingServerId != null) {
-                  "Updated SSH Server: ${server.name}"
+                  "Updated $label Server: ${server.name}"
                 } else {
-                  "Added SSH Server: ${server.name}"
+                  "Added $label Server: ${server.name}"
                 },
             )
           }
         }
         .onFailure { error ->
           transientState.update {
-            it.copy(statusBannerMessage = error.message ?: "Invalid SSH server settings.")
+            it.copy(statusBannerMessage = error.message ?: "Invalid SSH / SlowDNS server settings.")
           }
         }
     }

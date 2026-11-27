@@ -70,6 +70,7 @@ import com.example.ui.theme.SlateOutline
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import com.example.vpn.parser.VpnLinkParser
@@ -93,6 +94,10 @@ fun AddServerDialog(
     password: String,
     payload: String,
     httpProxy: String,
+    sshTunnelMode: SshTunnelMode,
+    slowDnsServerIp: String,
+    slowDnsNameserver: String,
+    slowDnsPublicKey: String,
     editingServerId: String?,
   ) -> Unit,
   onExportServer: (VpnServer) -> Unit = {},
@@ -124,6 +129,10 @@ fun AddServerDialog(
       }
     }
 
+  var sshTunnelMode by
+    remember(safeEditingServer?.id) {
+      mutableStateOf(safeEditingServer?.sshTunnelMode ?: SshTunnelMode.DIRECT_PAYLOAD)
+    }
   var sshName by remember(safeEditingServer?.id) { mutableStateOf(safeEditingServer?.name.orEmpty()) }
   var sshHost by remember(safeEditingServer?.id) { mutableStateOf(safeEditingServer?.address.orEmpty()) }
   var sshPortText by
@@ -141,10 +150,34 @@ fun AddServerDialog(
     remember(safeEditingServer?.id) { mutableStateOf(safeEditingServer?.sshProxyDisplay.orEmpty()) }
   var sshPayload by
     remember(safeEditingServer?.id) { mutableStateOf(safeEditingServer?.payload.orEmpty()) }
+  var slowDnsServerIp by
+    remember(safeEditingServer?.id) {
+      mutableStateOf(safeEditingServer?.slowDnsServerIp?.ifBlank { "8.8.8.8" } ?: "8.8.8.8")
+    }
+  var slowDnsNameserver by
+    remember(safeEditingServer?.id) { mutableStateOf(safeEditingServer?.slowDnsNameserver.orEmpty()) }
+  var slowDnsPublicKey by
+    remember(safeEditingServer?.id) { mutableStateOf(safeEditingServer?.slowDnsPublicKey.orEmpty()) }
 
+  val isSlowDns = sshTunnelMode == SshTunnelMode.SLOW_DNS
   val parsedSshPort = sshPortText.trim().toIntOrNull()
+  val cleanPubkey = slowDnsPublicKey.trim()
+  val isPubkeyValid =
+    cleanPubkey.length == 64 && cleanPubkey.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
   val isSshValid =
-    sshHost.isNotBlank() && parsedSshPort != null && parsedSshPort in 1..65535 && sshUsername.isNotBlank()
+    if (isSlowDns) {
+      parsedSshPort != null &&
+        parsedSshPort in 1..65535 &&
+        sshUsername.isNotBlank() &&
+        slowDnsServerIp.isNotBlank() &&
+        VpnLinkParser.sanitizeSlowDnsNameserver(slowDnsNameserver).isNotBlank() &&
+        isPubkeyValid
+    } else {
+      sshHost.isNotBlank() &&
+        parsedSshPort != null &&
+        parsedSshPort in 1..65535 &&
+        sshUsername.isNotBlank()
+    }
 
   val fieldColors =
     OutlinedTextFieldDefaults.colors(
@@ -243,11 +276,43 @@ fun AddServerDialog(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
+            Text(
+              text = "Connection Mode",
+              style = MaterialTheme.typography.labelSmall,
+              color = TextSecondary,
+            )
+            Row(
+              modifier =
+                Modifier.fillMaxWidth()
+                  .clip(RoundedCornerShape(12.dp))
+                  .background(DeepNavySurface)
+                  .border(1.dp, SlateOutline, RoundedCornerShape(12.dp))
+                  .padding(4.dp),
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              ProtocolTabButton(
+                label = "Direct / Payload",
+                selected = sshTunnelMode == SshTunnelMode.DIRECT_PAYLOAD,
+                accentColor = AmberConnecting,
+                onClick = { sshTunnelMode = SshTunnelMode.DIRECT_PAYLOAD },
+                modifier = Modifier.weight(1f).testTag("ssh_mode_direct"),
+              )
+              ProtocolTabButton(
+                label = "SlowDNS (DNSTT)",
+                selected = sshTunnelMode == SshTunnelMode.SLOW_DNS,
+                accentColor = EmeraldShield,
+                onClick = { sshTunnelMode = SshTunnelMode.SLOW_DNS },
+                modifier = Modifier.weight(1f).testTag("ssh_mode_slowdns"),
+              )
+            }
+
             OutlinedTextField(
               value = sshName,
               onValueChange = { sshName = it },
               label = { Text("Server Name (Optional)") },
-              placeholder = { Text("SG SSH Node", color = TextMuted) },
+              placeholder = {
+                Text(if (isSlowDns) "SlowDNS Node" else "SG SSH Node", color = TextMuted)
+              },
               singleLine = true,
               colors = fieldColors,
               modifier = Modifier.fillMaxWidth().testTag("ssh_name_input"),
@@ -260,8 +325,10 @@ fun AddServerDialog(
               OutlinedTextField(
                 value = sshHost,
                 onValueChange = { sshHost = it },
-                label = { Text("Host / IP") },
-                placeholder = { Text("157.85.103.29", color = TextMuted) },
+                label = { Text(if (isSlowDns) "SSH Host (Optional)" else "Host / IP") },
+                placeholder = {
+                  Text(if (isSlowDns) "127.0.0.1" else "157.85.103.29", color = TextMuted)
+                },
                 singleLine = true,
                 colors = fieldColors,
                 modifier = Modifier.weight(0.65f).testTag("ssh_host_input"),
@@ -333,71 +400,144 @@ fun AddServerDialog(
               modifier = Modifier.fillMaxWidth().testTag("ssh_password_input"),
             )
 
-            OutlinedTextField(
-              value = sshHttpProxy,
-              onValueChange = { sshHttpProxy = it },
-              label = { Text("HTTP Proxy (Optional · IP:Port)") },
-              placeholder = { Text("104.16.0.1:80", color = TextMuted) },
-              singleLine = true,
-              colors = fieldColors,
-              modifier = Modifier.fillMaxWidth().testTag("ssh_proxy_input"),
-            )
+            if (isSlowDns) {
+              OutlinedTextField(
+                value = slowDnsServerIp,
+                onValueChange = { slowDnsServerIp = it },
+                label = { Text("DNS Server IP") },
+                placeholder = { Text("8.8.8.8 or 1.1.1.1", color = TextMuted) },
+                singleLine = true,
+                colors = fieldColors,
+                modifier = Modifier.fillMaxWidth().testTag("slowdns_ip_input"),
+              )
 
-            OutlinedTextField(
-              value = sshPayload,
-              onValueChange = { sshPayload = it },
-              label = { Text("Payload (Custom HTTP Header)") },
-              placeholder = {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
                 Text(
-                  text = "GET / HTTP/1.1[crlf]Host: bug.example.com[crlf]Upgrade: websocket[crlf][crlf]",
-                  style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFamily, fontSize = 12.sp),
+                  text = "Quick DNS:",
+                  style = MaterialTheme.typography.labelSmall,
                   color = TextMuted,
                 )
-              },
-              textStyle =
-                MaterialTheme.typography.bodyMedium.copy(
-                  fontFamily = JetBrainsMonoFamily,
-                  fontSize = 12.sp,
-                ),
-              minLines = 3,
-              maxLines = 5,
-              colors = fieldColors,
-              modifier = Modifier.fillMaxWidth().testTag("ssh_payload_input"),
-            )
+                listOf("8.8.8.8", "1.1.1.1", "9.9.9.9").forEach { preset ->
+                  MiniChip(
+                    text = preset,
+                    highlighted = slowDnsServerIp.trim() == preset,
+                    onClick = { slowDnsServerIp = preset },
+                  )
+                }
+              }
 
-            Row(
-              modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              MiniChip(
-                text = "[host_port]",
-                highlighted = false,
-                onClick = { sshPayload += "[host_port]" },
+              OutlinedTextField(
+                value = slowDnsNameserver,
+                onValueChange = { slowDnsNameserver = it },
+                label = { Text("Nameserver (NS Domain)") },
+                placeholder = { Text("ns.example.com", color = TextMuted) },
+                singleLine = true,
+                colors = fieldColors,
+                modifier = Modifier.fillMaxWidth().testTag("slowdns_ns_input"),
               )
-              MiniChip(
-                text = "[crlf]",
-                highlighted = false,
-                onClick = { sshPayload += "[crlf]" },
-              )
-              MiniChip(
-                text = "[split]",
-                highlighted = false,
-                onClick = { sshPayload += "[split]" },
-              )
-              MiniChip(
-                text = "WS Sample",
-                highlighted = false,
-                onClick = {
-                  val hostToken = sshHost.trim().ifBlank { "[host]" }
-                  sshPayload =
-                    "GET / HTTP/1.1[crlf]Host: $hostToken[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]"
+
+              OutlinedTextField(
+                value = slowDnsPublicKey,
+                onValueChange = { input ->
+                  slowDnsPublicKey = input.filter { !it.isWhitespace() }.take(64)
                 },
+                label = { Text("Public Key (64-char hex)") },
+                placeholder = {
+                  Text(
+                    text = "0123456789abcdef...",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFamily, fontSize = 12.sp),
+                    color = TextMuted,
+                  )
+                },
+                supportingText = {
+                  Text(
+                    text = "${cleanPubkey.length}/64 hex characters",
+                    color = if (isPubkeyValid) EmeraldShield else TextMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                  )
+                },
+                textStyle =
+                  MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = JetBrainsMonoFamily,
+                    fontSize = 12.sp,
+                  ),
+                minLines = 2,
+                maxLines = 3,
+                colors = fieldColors,
+                modifier = Modifier.fillMaxWidth().testTag("slowdns_pubkey_input"),
               )
+            } else {
+              OutlinedTextField(
+                value = sshHttpProxy,
+                onValueChange = { sshHttpProxy = it },
+                label = { Text("HTTP Proxy (Optional · IP:Port)") },
+                placeholder = { Text("104.16.0.1:80", color = TextMuted) },
+                singleLine = true,
+                colors = fieldColors,
+                modifier = Modifier.fillMaxWidth().testTag("ssh_proxy_input"),
+              )
+
+              OutlinedTextField(
+                value = sshPayload,
+                onValueChange = { sshPayload = it },
+                label = { Text("Payload (Custom HTTP Header)") },
+                placeholder = {
+                  Text(
+                    text = "GET / HTTP/1.1[crlf]Host: bug.example.com[crlf]Upgrade: websocket[crlf][crlf]",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFamily, fontSize = 12.sp),
+                    color = TextMuted,
+                  )
+                },
+                textStyle =
+                  MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = JetBrainsMonoFamily,
+                    fontSize = 12.sp,
+                  ),
+                minLines = 3,
+                maxLines = 5,
+                colors = fieldColors,
+                modifier = Modifier.fillMaxWidth().testTag("ssh_payload_input"),
+              )
+
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                MiniChip(
+                  text = "[host_port]",
+                  highlighted = false,
+                  onClick = { sshPayload += "[host_port]" },
+                )
+                MiniChip(
+                  text = "[crlf]",
+                  highlighted = false,
+                  onClick = { sshPayload += "[crlf]" },
+                )
+                MiniChip(
+                  text = "[split]",
+                  highlighted = false,
+                  onClick = { sshPayload += "[split]" },
+                )
+                MiniChip(
+                  text = "WS Sample",
+                  highlighted = false,
+                  onClick = {
+                    val hostToken = sshHost.trim().ifBlank { "[host]" }
+                    sshPayload =
+                      "GET / HTTP/1.1[crlf]Host: $hostToken[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]"
+                  },
+                )
+              }
             }
 
             if (isSshValid) {
-              val parsedProxy = VpnLinkParser.parseProxyString(sshHttpProxy)
+              val parsedProxy =
+                if (isSlowDns) null else VpnLinkParser.parseProxyString(sshHttpProxy)
               OutlinedButton(
                 onClick = {
                   val previewServer =
@@ -410,6 +550,10 @@ fun AddServerDialog(
                       payload = sshPayload,
                       sshProxyHost = parsedProxy?.first.orEmpty(),
                       sshProxyPort = parsedProxy?.second ?: 0,
+                      sshTunnelMode = sshTunnelMode,
+                      slowDnsServerIp = slowDnsServerIp,
+                      slowDnsNameserver = slowDnsNameserver,
+                      slowDnsPublicKey = slowDnsPublicKey,
                       isCustom = true,
                     )
                   onExportServer(previewServer)
@@ -452,6 +596,10 @@ fun AddServerDialog(
               sshPassword,
               sshPayload,
               sshHttpProxy,
+              sshTunnelMode,
+              slowDnsServerIp,
+              slowDnsNameserver,
+              slowDnsPublicKey,
               safeEditingServer?.id,
             )
           },

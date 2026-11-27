@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.vpn.core.XrayCoreAdapterImpl
+import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import com.example.vpn.parser.VpnLinkParser
@@ -135,18 +136,34 @@ class ServerRepository(private val context: Context) {
     password: String,
     payload: String,
     httpProxy: String = "",
+    sshTunnelMode: SshTunnelMode = SshTunnelMode.DIRECT_PAYLOAD,
+    slowDnsServerIp: String = "",
+    slowDnsNameserver: String = "",
+    slowDnsPublicKey: String = "",
     editingServerId: String? = null,
   ): Result<VpnServer> =
     withContext(Dispatchers.IO) {
       runCatching {
-        val cleanHost = host.trim()
+        val isSlowDns = sshTunnelMode == SshTunnelMode.SLOW_DNS
+        val cleanHost = host.trim().ifBlank { if (isSlowDns) "127.0.0.1" else "" }
         val cleanUser = username.trim()
         require(cleanHost.isNotEmpty()) { "Host / IP is required." }
         require(port in 1..65535) { "Port must be between 1 and 65535." }
         require(cleanUser.isNotEmpty()) { "Username is required." }
 
+        val cleanDnsIp = slowDnsServerIp.trim()
+        val cleanNs = VpnLinkParser.sanitizeSlowDnsNameserver(slowDnsNameserver)
+        val cleanPubkey = slowDnsPublicKey.trim().lowercase()
+        if (isSlowDns) {
+          require(cleanDnsIp.isNotEmpty()) { "DNS Server IP is required for SlowDNS." }
+          require(cleanNs.isNotEmpty()) { "Nameserver (NS Domain) is required for SlowDNS." }
+          require(
+            cleanPubkey.length == 64 && cleanPubkey.all { it in '0'..'9' || it in 'a'..'f' }
+          ) { "SlowDNS Public Key must be a valid 64-character hex string." }
+        }
+
         val parsedProxy =
-          if (httpProxy.isBlank()) {
+          if (isSlowDns || httpProxy.isBlank()) {
             "" to 0
           } else {
             VpnLinkParser.parseProxyString(httpProxy)
@@ -169,6 +186,10 @@ class ServerRepository(private val context: Context) {
             payload = payload,
             sshProxyHost = parsedProxy.first,
             sshProxyPort = parsedProxy.second,
+            sshTunnelMode = sshTunnelMode,
+            slowDnsServerIp = cleanDnsIp,
+            slowDnsNameserver = cleanNs,
+            slowDnsPublicKey = cleanPubkey,
             isCustom = true,
           )
         saveCustomServer(server, replaceServerId = editingServerId)

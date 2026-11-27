@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
           onOpenExportDialog = { server -> viewModel.openExportDialog(server) },
           onCloseExportDialog = { viewModel.closeExportDialog() },
           onImportLink = { link -> viewModel.importCustomServer(link) },
-          onAddSshServer = { name, host, port, username, password, payload, httpProxy, editingId ->
+          onAddSshServer = { name, host, port, username, password, payload, httpProxy, tunnelMode, dnsIp, nsDomain, pubKey, editingId ->
             viewModel.addSshServer(
               name = name,
               host = host,
@@ -89,6 +89,10 @@ class MainActivity : ComponentActivity() {
               password = password,
               payload = payload,
               httpProxy = httpProxy,
+              sshTunnelMode = tunnelMode,
+              slowDnsServerIp = dnsIp,
+              slowDnsNameserver = nsDomain,
+              slowDnsPublicKey = pubKey,
               editingServerId = editingId,
             )
           },

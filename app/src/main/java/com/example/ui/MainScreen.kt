@@ -114,6 +114,7 @@ import com.example.ui.theme.SpaceGroteskFamily
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.TrafficStats
 import com.example.vpn.model.VpnConnectionState
 import com.example.vpn.model.VpnProtocol
@@ -146,6 +147,10 @@ fun MainScreen(
     password: String,
     payload: String,
     httpProxy: String,
+    sshTunnelMode: SshTunnelMode,
+    slowDnsServerIp: String,
+    slowDnsNameserver: String,
+    slowDnsPublicKey: String,
     editingServerId: String?,
   ) -> Unit,
   onDeleteCustomServer: (String) -> Unit,
@@ -1041,7 +1046,12 @@ private fun TelemetryBottomStrip(
     TelemetryCard(
       label = stringResource(R.string.latency_label),
       value = selectedServer?.latencyMs?.let { "$it ms" } ?: "—",
-      subValue = selectedServer?.protocol?.displayName ?: "Xray",
+      subValue =
+        when {
+          selectedServer == null -> "Xray"
+          selectedServer.isSlowDns -> "SlowDNS"
+          else -> selectedServer.protocol.displayName
+        },
       icon = Icons.Rounded.NetworkCheck,
       tint = AmberConnecting,
       modifier = Modifier.weight(1f),

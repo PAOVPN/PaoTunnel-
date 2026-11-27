@@ -8,6 +8,11 @@ enum class VpnProtocol(val displayName: String) {
   SSH("SSH"),
 }
 
+enum class SshTunnelMode(val displayName: String) {
+  DIRECT_PAYLOAD("Direct / Payload"),
+  SLOW_DNS("SlowDNS (DNSTT)"),
+}
+
 enum class VpnConnectionState {
   DISCONNECTED,
   CONNECTING,
@@ -47,6 +52,10 @@ data class VpnServer(
   val payload: String = "",
   val sshProxyHost: String = "",
   val sshProxyPort: Int = 0,
+  val sshTunnelMode: SshTunnelMode = SshTunnelMode.DIRECT_PAYLOAD,
+  val slowDnsServerIp: String = "",
+  val slowDnsNameserver: String = "",
+  val slowDnsPublicKey: String = "",
   val rawUri: String = "",
   val isCustom: Boolean = false,
   val isLocked: Boolean = false,
@@ -55,16 +64,28 @@ data class VpnServer(
   val sshProxyDisplay: String
     get() = if (sshProxyHost.isNotBlank() && sshProxyPort > 0) "$sshProxyHost:$sshProxyPort" else ""
 
+  val isSlowDns: Boolean
+    get() = protocol == VpnProtocol.SSH && sshTunnelMode == SshTunnelMode.SLOW_DNS
+
   val homeDisplaySubtitle: String
     get() =
       when (protocol) {
-        VpnProtocol.SSH -> "SSH • Protected Config"
+        VpnProtocol.SSH ->
+          if (sshTunnelMode == SshTunnelMode.SLOW_DNS) {
+            "SlowDNS • Protected Config"
+          } else {
+            "SSH • Protected Config"
+          }
         VpnProtocol.VLESS, VpnProtocol.VMESS -> "V2Ray • Protected"
       }
 
   val transportSummary: String
     get() {
       if (protocol == VpnProtocol.SSH) {
+        if (sshTunnelMode == SshTunnelMode.SLOW_DNS) {
+          val userPrefix = if (username.isNotBlank()) "$username · " else ""
+          return "${userPrefix}SLOWDNS"
+        }
         val hasProxy = sshProxyHost.isNotBlank() && sshProxyPort > 0
         val hasPayload = payload.isNotBlank()
         val modeLabel =
