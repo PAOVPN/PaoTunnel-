@@ -8,9 +8,13 @@ import java.io.OutputStream
 import java.io.PushbackInputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 
 internal object SshPayloadHelper {
+
+  const val DEFAULT_USER_AGENT =
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
   data class PayloadSegment(
     val bytes: ByteArray,
@@ -18,6 +22,8 @@ internal object SshPayloadHelper {
   )
 
   private val splitRegex = Regex("\\[(split|delay_split|instant_split)]", RegexOption.IGNORE_CASE)
+  private val httpMethodStartRegex =
+    Regex("^(GET|POST|HEAD|PUT|PATCH|DELETE|OPTIONS|CONNECT)\\s+", RegexOption.IGNORE_CASE)
 
   fun formatPayload(rawTemplate: String, host: String, port: Int): String {
     if (rawTemplate.isBlank()) return ""
@@ -28,42 +34,30 @@ internal object SshPayloadHelper {
         .replace("\\r", "\r")
         .replace("\\n", "\n")
 
+    // Normalize bare LF from multiline editors into CRLF before [lf]/[cr] tag expansion
+    formatted = Regex("(?<!\r)\n(?!\r)").replace(formatted, "\r\n")
+
+    val rawConnect = "CONNECT $host:$port HTTP/1.1\r\nHost: $host:$port\r\n\r\n"
     formatted =
       formatted
         .replace("[host_port]", "$host:$port", ignoreCase = true)
         .replace("[host]", host, ignoreCase = true)
         .replace("[port]", port.toString(), ignoreCase = true)
         .replace("[protocol]", "HTTP/1.1", ignoreCase = true)
-        .replace(
-          "[raw]",
-          "CONNECT $host:$port HTTP/1.1\r\nHost: $host:$port\r\n\r\n",
-          ignoreCase = true,
-        )
-        .replace(
-          "[real_raw]",
-          "CONNECT $host:$port HTTP/1.1\r\nHost: $host:$port\r\n\r\n",
-          ignoreCase = true,
-        )
-        .replace(
-          "[ua]",
-          "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36",
-          ignoreCase = true,
-        )
+        .replace("[raw]", rawConnect, ignoreCase = true)
+        .replace("[real_raw]", rawConnect, ignoreCase = true)
+        .replace("[netData]", rawConnect, ignoreCase = true)
+        .replace("[ua]", DEFAULT_USER_AGENT, ignoreCase = true)
         .replace("[crlf]", "\r\n", ignoreCase = true)
         .replace("[lfcr]", "\n\r", ignoreCase = true)
         .replace("[cr]", "\r", ignoreCase = true)
         .replace("[lf]", "\n", ignoreCase = true)
 
-    // Normalize bare LF into CRLF for HTTP compatibility if user typed multiline headers
-    if (!formatted.contains("\r") && formatted.contains("\n")) {
-      formatted = formatted.replace("\n", "\r\n")
-    }
-    if (!formatted.endsWith("\r\n\r\n") &&
-      (formatted.startsWith("GET ", ignoreCase = true) ||
-        formatted.startsWith("POST ", ignoreCase = true) ||
-        formatted.startsWith("HEAD ", ignoreCase = true) ||
-        formatted.startsWith("PUT ", ignoreCase = true) ||
-        formatted.startsWith("CONNECT ", ignoreCase = true))
+    val endsWithSplitTag =
+      splitRegex.findAll(formatted).lastOrNull()?.range?.last == formatted.length - 1
+    if (!endsWithSplitTag &&
+      !formatted.endsWith("\r\n\r\n") &&
+      httpMethodStartRegex.containsMatchIn(formatted.trimStart())
     ) {
       formatted = formatted.trimEnd('\r', '\n') + "\r\n\r\n"
     }
@@ -72,28 +66,72 @@ internal object SshPayloadHelper {
 
   fun splitSegments(formattedPayload: String): List<PayloadSegment> {
     if (formattedPayload.isEmpty()) return emptyList()
+
+    // Step 1: Split on explicit [split], [delay_split], [instant_split] markers
+    val primaryChunks = mutableListOf<Pair<String, Long>>()
     val matches = splitRegex.findAll(formattedPayload).toList()
     if (matches.isEmpty()) {
-      return listOf(PayloadSegment(formattedPayload.toByteArray(StandardCharsets.UTF_8)))
-    }
-    val segments = mutableListOf<PayloadSegment>()
-    var cursor = 0
-    for (match in matches) {
-      val chunk = formattedPayload.substring(cursor, match.range.first)
-      val tag = match.groupValues[1].lowercase()
-      val delayMs = if (tag == "delay_split") 80L else 0L
-      if (chunk.isNotEmpty()) {
-        segments.add(PayloadSegment(chunk.toByteArray(StandardCharsets.UTF_8), delayMs))
+      primaryChunks.add(formattedPayload to 0L)
+    } else {
+      var cursor = 0
+      for (match in matches) {
+        val chunk = formattedPayload.substring(cursor, match.range.first)
+        val tag = match.groupValues[1].lowercase()
+        val delayMs = if (tag == "instant_split") 0L else 100L
+        if (chunk.isNotEmpty()) {
+          primaryChunks.add(chunk to delayMs)
+        }
+        cursor = match.range.last + 1
       }
-      cursor = match.range.last + 1
-    }
-    if (cursor < formattedPayload.length) {
-      val tail = formattedPayload.substring(cursor)
-      if (tail.isNotEmpty()) {
-        segments.add(PayloadSegment(tail.toByteArray(StandardCharsets.UTF_8), 0L))
+      if (cursor < formattedPayload.length) {
+        val tail = formattedPayload.substring(cursor)
+        if (tail.isNotEmpty()) {
+          primaryChunks.add(tail to 0L)
+        }
       }
     }
-    return segments
+
+    // Step 2: Further split concatenated multi-request payloads separated by \r\n\r\n
+    val finalSegments = mutableListOf<PayloadSegment>()
+    for ((chunk, explicitDelayMs) in primaryChunks) {
+      val subRequests = splitConcatenatedHttpRequests(chunk)
+      subRequests.forEachIndexed { index, req ->
+        val isLastSubRequest = index == subRequests.lastIndex
+        val delay =
+          when {
+            !isLastSubRequest -> 100L
+            else -> explicitDelayMs
+          }
+        if (req.isNotEmpty()) {
+          finalSegments.add(PayloadSegment(req.toByteArray(StandardCharsets.UTF_8), delay))
+        }
+      }
+    }
+    return finalSegments
+  }
+
+  private fun splitConcatenatedHttpRequests(chunk: String): List<String> {
+    val result = mutableListOf<String>()
+    var start = 0
+    while (start < chunk.length) {
+      val boundary = chunk.indexOf("\r\n\r\n", startIndex = start)
+      if (boundary == -1) {
+        val remaining = chunk.substring(start)
+        if (remaining.isNotEmpty()) result.add(remaining)
+        break
+      }
+      val endOfRequest = boundary + 4
+      val part = chunk.substring(start, endOfRequest)
+      val rest = chunk.substring(endOfRequest)
+      if (rest.isBlank()) {
+        // Trailing whitespace/newlines stay attached to this request
+        result.add(chunk.substring(start))
+        break
+      }
+      result.add(part)
+      start = endOfRequest
+    }
+    return result
   }
 }
 
@@ -129,16 +167,20 @@ internal class PayloadSocketFactory(
     val formatted = SshPayloadHelper.formatPayload(effectiveTemplate, host, port)
     val segments = SshPayloadHelper.splitSegments(formatted)
     val out = socket.getOutputStream()
-    for (segment in segments) {
+    segments.forEachIndexed { index, segment ->
       out.write(segment.bytes)
       out.flush()
-      if (segment.delayAfterMs > 0L) {
+      if (segment.delayAfterMs > 0L && index < segments.lastIndex) {
         Thread.sleep(segment.delayAfterMs)
       }
     }
 
-    val pushbackIn = PushbackInputStream(socket.getInputStream(), 8192)
-    consumeOptionalHttpUpgradeResponse(pushbackIn)
+    val pushbackIn = PushbackInputStream(socket.getInputStream(), 16 * 1024)
+    consumeHttpUpgradeResponses(
+      socket = socket,
+      input = pushbackIn,
+      expectedRequests = segments.size.coerceAtLeast(1),
+    )
     socket.soTimeout = 0
 
     return object : Socket() {
@@ -174,30 +216,100 @@ internal class PayloadSocketFactory(
 
   override fun getOutputStream(socket: Socket): OutputStream = socket.getOutputStream()
 
-  private fun consumeOptionalHttpUpgradeResponse(input: PushbackInputStream) {
-    val peekBuf = ByteArray(4)
-    var readCount = 0
-    while (readCount < peekBuf.size) {
-      val b = input.read()
-      if (b == -1) break
-      peekBuf[readCount++] = b.toByte()
-    }
-    if (readCount == 0) {
-      throw IOException("Server closed connection after sending payload.")
+  internal fun consumeHttpUpgradeResponses(
+    socket: Socket?,
+    input: PushbackInputStream,
+    expectedRequests: Int,
+  ) {
+    var lastSuccessStatus: String? = null
+    var lastErrorStatus: String? = null
+    val maxResponses = expectedRequests.coerceAtLeast(1) + 2
+
+    for (attempt in 0 until maxResponses) {
+      // If we already got a 2xx response and are peeking for a possible follow-up 101 response
+      // (or SSH banner), keep timeout short so we don't stall on servers that wait quietly.
+      if (lastSuccessStatus != null && socket != null) {
+        socket.soTimeout = 1500
+      }
+
+      val peekBuf = ByteArray(4)
+      var readCount = 0
+      try {
+        while (readCount < peekBuf.size) {
+          val b = input.read()
+          if (b == -1) break
+          peekBuf[readCount++] = b.toByte()
+        }
+      } catch (_: SocketTimeoutException) {
+        if (readCount > 0) {
+          input.unread(peekBuf, 0, readCount)
+        }
+        break
+      }
+
+      if (readCount == 0) {
+        break
+      }
+
+      val prefix = String(peekBuf, 0, readCount, StandardCharsets.US_ASCII)
+      if (prefix.startsWith("SSH-")) {
+        input.unread(peekBuf, 0, readCount)
+        return
+      }
+
+      if (!prefix.startsWith("HTTP")) {
+        if (lastSuccessStatus != null) {
+          // Non-HTTP payload after a 200 OK (likely binary/SSH data) -> restore for JSch
+          input.unread(peekBuf, 0, readCount)
+          return
+        }
+        // Previous response was a 4xx error with an unframed body; skip until next HTTP/ or SSH-
+        val foundMarker = skipUntilHttpOrSshMarker(input, peekBuf, readCount)
+        if (!foundMarker) {
+          break
+        }
+        continue
+      }
+
+      val headerText = readHttpHeaderBlock(input, peekBuf, readCount)
+      val lines = headerText.split(Regex("\r?\n"))
+      val statusLine = lines.firstOrNull().orEmpty().trim()
+      val statusCode = statusLine.split(Regex("\\s+")).getOrNull(1)?.toIntOrNull()
+
+      if (statusCode != 101) {
+        drainHttpBodyIfPresent(input, lines)
+      }
+
+      if (statusCode != null && statusCode in 100..299) {
+        lastSuccessStatus = statusLine
+        if (statusCode == 101) {
+          // WebSocket Upgrade complete; hand socket directly to JSch for SSH handshake
+          return
+        }
+        if (attempt + 1 >= expectedRequests) {
+          return
+        }
+      } else if (statusCode != null) {
+        // Do NOT fail immediately on 400 Bad Request etc. in multi-request payloads;
+        // continue checking subsequent responses for HTTP 101 / 200 OK.
+        lastErrorStatus = statusLine
+      }
     }
 
-    val prefix = String(peekBuf, 0, readCount, StandardCharsets.US_ASCII)
-    if (!prefix.startsWith("HTTP", ignoreCase = true)) {
-      // Server immediately sent SSH banner (e.g. "SSH-2.0-..."); unread peeked bytes for JSch.
-      input.unread(peekBuf, 0, readCount)
-      return
+    if (lastSuccessStatus == null && lastErrorStatus != null) {
+      throw IOException("SSH payload handshake failed: $lastErrorStatus")
     }
+  }
 
-    // Consume HTTP response headers until \r\n\r\n (or \n\n)
+  private fun readHttpHeaderBlock(
+    input: PushbackInputStream,
+    initialBytes: ByteArray,
+    initialLen: Int,
+  ): String {
     val headerBuffer = ByteArrayOutputStream()
-    headerBuffer.write(peekBuf, 0, readCount)
+    headerBuffer.write(initialBytes, 0, initialLen)
 
-    var totalBytes = readCount
+    var totalBytes = initialLen
     while (totalBytes < 16_384) {
       val next = input.read()
       if (next == -1) break
@@ -207,13 +319,98 @@ internal class PayloadSocketFactory(
         break
       }
     }
+    return headerBuffer.toString(StandardCharsets.US_ASCII.name())
+  }
 
-    val headerText = headerBuffer.toString(StandardCharsets.US_ASCII.name())
-    val statusLine = headerText.lineSequence().firstOrNull().orEmpty().trim()
-    val statusCode = statusLine.split(Regex("\\s+")).getOrNull(1)?.toIntOrNull()
-    if (statusCode != null && statusCode !in 100..299) {
-      throw IOException("SSH payload handshake failed: $statusLine")
+  private fun drainHttpBodyIfPresent(input: PushbackInputStream, headerLines: List<String>) {
+    var contentLength = 0
+    var isChunked = false
+    for (line in headerLines.drop(1)) {
+      val colon = line.indexOf(':')
+      if (colon <= 0) continue
+      val key = line.substring(0, colon).trim().lowercase()
+      val value = line.substring(colon + 1).trim()
+      when (key) {
+        "content-length" -> contentLength = value.toIntOrNull()?.coerceIn(0, 65_536) ?: 0
+        "transfer-encoding" -> if (value.contains("chunked", ignoreCase = true)) isChunked = true
+      }
     }
+
+    if (isChunked) {
+      drainChunkedBody(input)
+    } else if (contentLength > 0) {
+      var remaining = contentLength
+      val skipBuf = ByteArray(1024)
+      while (remaining > 0) {
+        val toRead = minOf(remaining, skipBuf.size)
+        val n = input.read(skipBuf, 0, toRead)
+        if (n <= 0) break
+        remaining -= n
+      }
+    }
+  }
+
+  private fun drainChunkedBody(input: PushbackInputStream) {
+    var totalDrained = 0
+    while (totalDrained < 65_536) {
+      val sizeLine = readAsciiLine(input) ?: break
+      val chunkSize = sizeLine.substringBefore(';').trim().toIntOrNull(16) ?: break
+      if (chunkSize == 0) {
+        // Consume final trailing CRLF after 0-byte chunk
+        readAsciiLine(input)
+        break
+      }
+      var left = chunkSize
+      val buf = ByteArray(1024)
+      while (left > 0) {
+        val n = input.read(buf, 0, minOf(left, buf.size))
+        if (n <= 0) return
+        left -= n
+        totalDrained += n
+      }
+      // Consume trailing CRLF of chunk
+      readAsciiLine(input)
+    }
+  }
+
+  private fun readAsciiLine(input: PushbackInputStream): String? {
+    val out = ByteArrayOutputStream()
+    var count = 0
+    while (count < 4096) {
+      val b = input.read()
+      if (b == -1) return if (out.size() == 0) null else out.toString(StandardCharsets.US_ASCII.name())
+      count++
+      if (b == '\n'.code) break
+      if (b != '\r'.code) out.write(b)
+    }
+    return out.toString(StandardCharsets.US_ASCII.name())
+  }
+
+  private fun skipUntilHttpOrSshMarker(
+    input: PushbackInputStream,
+    initialBytes: ByteArray,
+    initialLen: Int,
+  ): Boolean {
+    val window = ByteArrayOutputStream()
+    window.write(initialBytes, 0, initialLen)
+    var scanned = initialLen
+    while (scanned < 16_384) {
+      val b = input.read()
+      if (b == -1) return false
+      window.write(b)
+      scanned++
+      val bytes = window.toByteArray()
+      val n = bytes.size
+      if (n >= 5 && String(bytes, n - 5, 5, StandardCharsets.US_ASCII) == "HTTP/") {
+        input.unread(bytes, n - 5, 5)
+        return true
+      }
+      if (n >= 4 && String(bytes, n - 4, 4, StandardCharsets.US_ASCII) == "SSH-") {
+        input.unread(bytes, n - 4, 4)
+        return true
+      }
+    }
+    return false
   }
 
   private fun endsWithHeaderTerminator(bytes: ByteArray): Boolean {
