@@ -11,6 +11,7 @@ object XrayConfigBuilder {
     server: VpnServer,
     enableTunInbound: Boolean = true,
     sshLocalSocksPort: Int = 10808,
+    udpLocalSocksPort: Int = 10809,
   ): String {
     val root = JSONObject()
 
@@ -41,7 +42,8 @@ object XrayConfigBuilder {
       },
     )
 
-    val isSsh = server.protocol == VpnProtocol.SSH
+    val isExternalSocks =
+      server.protocol == VpnProtocol.SSH || server.protocol == VpnProtocol.UDP
     val mappedDomain = resolvePlainVlessMappedDomain(server)
     root.put(
       "dns",
@@ -49,8 +51,8 @@ object XrayConfigBuilder {
         if (mappedDomain != null) {
           put("hosts", JSONObject().put(mappedDomain, server.address.trim()))
         }
-        if (isSsh) {
-          // SSH direct-tcpip tunnels TCP only, so force DNS resolution over TCP through SOCKS5
+        if (isExternalSocks) {
+          // Force DNS resolution via Xray dns-out -> upstream SOCKS5 proxy
           put("servers", JSONArray().put("tcp://1.1.1.1").put("tcp://8.8.8.8"))
         } else {
           put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8").put("localhost"))
@@ -84,7 +86,7 @@ object XrayConfigBuilder {
         }
       )
     }
-    if (!isSsh) {
+    if (!isExternalSocks) {
       inbounds.put(
         JSONObject().apply {
           put("tag", "socks-in")
@@ -105,8 +107,8 @@ object XrayConfigBuilder {
     root.put("inbounds", inbounds)
 
     val outbounds = JSONArray()
-    outbounds.put(buildProxyOutbound(server, sshLocalSocksPort))
-    if (isSsh) {
+    outbounds.put(buildProxyOutbound(server, sshLocalSocksPort, udpLocalSocksPort))
+    if (isExternalSocks) {
       outbounds.put(
         JSONObject().apply {
           put("tag", "dns-out")
@@ -136,7 +138,7 @@ object XrayConfigBuilder {
         put(
           "rules",
           JSONArray().apply {
-            if (isSsh) {
+            if (isExternalSocks) {
               put(
                 JSONObject().apply {
                   put("type", "field")
@@ -232,7 +234,11 @@ object XrayConfigBuilder {
     return resolvePlainVlessMappedDomain(server) ?: server.address.trim()
   }
 
-  private fun buildProxyOutbound(server: VpnServer, sshLocalSocksPort: Int): JSONObject {
+  private fun buildProxyOutbound(
+    server: VpnServer,
+    sshLocalSocksPort: Int,
+    udpLocalSocksPort: Int,
+  ): JSONObject {
     val outbound = JSONObject()
     outbound.put("tag", "proxy")
 
@@ -281,6 +287,15 @@ object XrayConfigBuilder {
           JSONObject().apply {
             put("address", "127.0.0.1")
             put("port", sshLocalSocksPort)
+          }
+        outbound.put("settings", JSONObject().put("servers", JSONArray().put(socksServer)))
+      }
+      VpnProtocol.UDP -> {
+        outbound.put("protocol", "socks")
+        val socksServer =
+          JSONObject().apply {
+            put("address", "127.0.0.1")
+            put("port", udpLocalSocksPort)
           }
         outbound.put("settings", JSONObject().put("servers", JSONArray().put(socksServer)))
       }

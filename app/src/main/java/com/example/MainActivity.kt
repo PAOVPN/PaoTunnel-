@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
           onConnectClick = initiateVpnConnect,
           onDisconnectClick = { viewModel.disconnectVpn(context) },
           onOpenImportDialog = { viewModel.openImportDialog() },
-          onEditSshServer = { server -> viewModel.openEditSshDialog(server) },
+          onEditServer = { server -> viewModel.openEditServerDialog(server) },
           onCloseImportDialog = { viewModel.closeImportDialog() },
           onOpenExportDialog = { server -> viewModel.openExportDialog(server) },
           onCloseExportDialog = { viewModel.closeExportDialog() },
@@ -93,6 +93,16 @@ class MainActivity : ComponentActivity() {
               slowDnsServerIp = dnsIp,
               slowDnsNameserver = nsDomain,
               slowDnsPublicKey = pubKey,
+              editingServerId = editingId,
+            )
+          },
+          onAddUdpServer = { name, host, portRange, password, receiveWindow, editingId ->
+            viewModel.addUdpServer(
+              name = name,
+              host = host,
+              portRange = portRange,
+              password = password,
+              receiveWindow = receiveWindow,
               editingServerId = editingId,
             )
           },

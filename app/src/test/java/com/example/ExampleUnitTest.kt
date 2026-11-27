@@ -258,4 +258,72 @@ class ExampleUnitTest {
     assertEquals(pubKey, decrypted.slowDnsPublicKey)
     assertEquals("SlowDNS • Protected Config", decrypted.homeDisplaySubtitle)
   }
+
+  @Test
+  fun udpZivpn_configJsonUriParsingAndAesLockPreserveAllFields() {
+    val parsedDefault =
+      com.example.vpn.parser.VpnLinkParser.parseUri(
+        "udp://zivpn_pw@157.85.103.29?window=3#SG%20ZIVPN",
+        isCustom = true,
+      )!!
+
+    assertEquals(com.example.vpn.model.VpnProtocol.UDP, parsedDefault.protocol)
+    assertEquals("SG ZIVPN", parsedDefault.name)
+    assertEquals("157.85.103.29", parsedDefault.address)
+    assertEquals("6000-19999", parsedDefault.effectiveUdpPortRange)
+    assertEquals(6000, parsedDefault.port)
+    assertEquals("zivpn_pw", parsedDefault.password)
+    assertEquals(3, parsedDefault.udpReceiveWindow)
+    assertEquals("UDP • Protected Config", parsedDefault.homeDisplaySubtitle)
+
+    val parsedCustomRange =
+      com.example.vpn.parser.VpnLinkParser.parseUri(
+        "udp://my_pass@45.32.1.2:7000-15000?window=2#Custom%20UDP",
+        isCustom = false,
+      )!!
+    assertEquals("7000-15000", parsedCustomRange.effectiveUdpPortRange)
+    assertEquals(7000, parsedCustomRange.port)
+    assertEquals(2, parsedCustomRange.udpReceiveWindow)
+
+    val configJson = com.example.vpn.udp.HysteriaUdpManager.buildConfigJson(parsedCustomRange)
+    assertTrue(configJson.contains("\"server\": \"45.32.1.2:7000-15000\""))
+    assertTrue(configJson.contains("\"protocol\": \"udp\""))
+    assertTrue(configJson.contains("\"auth_str\": \"my_pass\""))
+    assertTrue(configJson.contains("\"obfs\": \"my_pass\""))
+    assertTrue(configJson.contains("\"recv_window_conn\": 2097152"))
+    assertTrue(configJson.contains("\"recv_window\": 5242880"))
+    assertTrue(configJson.contains("\"insecure\": true"))
+    assertTrue(configJson.contains("\"listen\": \"127.0.0.1:10809\""))
+
+    val cmd =
+      com.example.vpn.udp.HysteriaUdpManager.buildCommand(
+        "/data/app/lib/arm64/libhysteria.so",
+        "/data/user/0/app/files/hysteria_udp_config.json",
+      )
+    assertEquals(
+      listOf(
+        "/data/app/lib/arm64/libhysteria.so",
+        "client",
+        "--no-check",
+        "-c",
+        "/data/user/0/app/files/hysteria_udp_config.json",
+      ),
+      cmd,
+    )
+
+    val lockedLink = com.example.vpn.crypto.ConfigCrypto.encryptServerToLink(parsedCustomRange)
+    assertTrue(lockedLink.startsWith("paolock://"))
+    assertTrue(!lockedLink.contains("45.32.1.2"))
+    assertTrue(!lockedLink.contains("my_pass"))
+    assertTrue(!lockedLink.contains("7000-15000"))
+
+    val decrypted = com.example.vpn.crypto.ConfigCrypto.decryptLinkToServer(lockedLink)!!
+    assertTrue(decrypted.isLocked)
+    assertEquals(com.example.vpn.model.VpnProtocol.UDP, decrypted.protocol)
+    assertEquals("45.32.1.2", decrypted.address)
+    assertEquals("7000-15000", decrypted.effectiveUdpPortRange)
+    assertEquals("my_pass", decrypted.password)
+    assertEquals(2, decrypted.udpReceiveWindow)
+    assertEquals("UDP • Protected Config", decrypted.homeDisplaySubtitle)
+  }
 }

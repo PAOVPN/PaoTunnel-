@@ -13,6 +13,7 @@ import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import com.example.vpn.parser.VpnLinkParser
 import com.example.vpn.parser.XrayConfigBuilder
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.TimeUnit
@@ -87,7 +88,7 @@ class ServerRepository(private val context: Context) {
 
         val parsed = VpnLinkParser.parseServersPayload(body)
         if (parsed.isEmpty()) {
-          error("No valid VLESS or VMess servers found in remote servers.json")
+          error("No valid VLESS, VMess, SSH, or UDP servers found in remote servers.json")
         }
 
         val now = System.currentTimeMillis()
@@ -124,7 +125,7 @@ class ServerRepository(private val context: Context) {
           batch.asReversed().forEach { saveCustomServer(it) }
           return@runCatching batch.first()
         }
-        error("Invalid link or file. Please use a valid vless://, vmess://, ssh://, or paolock:// config.")
+        error("Invalid link or file. Please use a valid vless://, vmess://, ssh://, udp://, or paolock:// config.")
       }
     }
 
@@ -197,6 +198,44 @@ class ServerRepository(private val context: Context) {
       }
     }
 
+  suspend fun addUdpServer(
+    name: String,
+    host: String,
+    portRange: String,
+    password: String,
+    receiveWindow: Int,
+    editingServerId: String? = null,
+  ): Result<VpnServer> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        val cleanHost = host.trim()
+        require(cleanHost.isNotEmpty()) { "UDP Server (Host / IP) is required." }
+        val sanitized =
+          VpnLinkParser.sanitizeUdpPortRange(portRange)
+            ?: error("Invalid UDP Port / Range. Use e.g. 6000-19999 or 36712.")
+        require(password.isNotEmpty()) { "UDP Password / Auth is required." }
+        require(receiveWindow in 1..64) { "Receive Window must be between 1 and 64." }
+
+        if (editingServerId != null) {
+          val isTargetLocked =
+            allServersFlow.first().any { it.id == editingServerId && it.isLocked }
+          require(!isTargetLocked) { "Locked configs cannot be modified." }
+        }
+
+        val server =
+          VpnLinkParser.createUdpServer(
+            name = name,
+            host = cleanHost,
+            portRange = sanitized.first,
+            password = password,
+            receiveWindow = receiveWindow,
+            isCustom = true,
+          )
+        saveCustomServer(server, replaceServerId = editingServerId)
+        server
+      }
+    }
+
   private suspend fun saveCustomServer(server: VpnServer, replaceServerId: String? = null) {
     context.vpnDataStore.edit { prefs ->
       val existing = VpnLinkParser.fromStorageJson(prefs[KEY_CUSTOM_SERVERS].orEmpty())
@@ -250,20 +289,34 @@ class ServerRepository(private val context: Context) {
         val delay = XrayCoreAdapterImpl.measureDelay()
         if (delay != null) return@withContext delay
       }
-      if (server.protocol != VpnProtocol.SSH && XrayCoreAdapterImpl.isCoreAvailable) {
+      if ((server.protocol == VpnProtocol.VLESS || server.protocol == VpnProtocol.VMESS) &&
+        XrayCoreAdapterImpl.isCoreAvailable
+      ) {
         val config = XrayConfigBuilder.buildConfig(server, enableTunInbound = false)
         val outboundDelay = XrayCoreAdapterImpl.measureOutboundDelay(config)
         if (outboundDelay != null) return@withContext outboundDelay
       }
-      // Fallback: real TCP handshake latency to server host:port
-      runCatching {
-          val start = System.currentTimeMillis()
-          Socket().use { socket ->
-            socket.connect(InetSocketAddress(server.address, server.port), 3500)
+      // Fallback: real TCP handshake latency (or ICMP reachability for UDP servers)
+      val tcpLatency =
+        runCatching {
+            val start = System.currentTimeMillis()
+            Socket().use { socket ->
+              socket.connect(InetSocketAddress(server.address, server.port), 3500)
+            }
+            (System.currentTimeMillis() - start).coerceAtLeast(1L)
           }
-          (System.currentTimeMillis() - start).coerceAtLeast(1L)
-        }
-        .getOrNull()
+          .getOrNull()
+      if (tcpLatency != null) return@withContext tcpLatency
+
+      if (server.protocol == VpnProtocol.UDP) {
+        return@withContext runCatching {
+            val start = System.currentTimeMillis()
+            val reachable = InetAddress.getByName(server.address).isReachable(3000)
+            if (reachable) (System.currentTimeMillis() - start).coerceAtLeast(1L) else null
+          }
+          .getOrNull()
+      }
+      null
     }
 
   suspend fun getServerById(serverId: String): VpnServer? {

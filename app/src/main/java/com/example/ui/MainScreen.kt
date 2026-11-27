@@ -114,6 +114,7 @@ import com.example.ui.theme.SpaceGroteskFamily
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.VioletUdp
 import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.TrafficStats
 import com.example.vpn.model.VpnConnectionState
@@ -134,7 +135,7 @@ fun MainScreen(
   onConnectClick: () -> Unit,
   onDisconnectClick: () -> Unit,
   onOpenImportDialog: () -> Unit,
-  onEditSshServer: (VpnServer) -> Unit,
+  onEditServer: (VpnServer) -> Unit,
   onCloseImportDialog: () -> Unit,
   onOpenExportDialog: (VpnServer) -> Unit,
   onCloseExportDialog: () -> Unit,
@@ -151,6 +152,14 @@ fun MainScreen(
     slowDnsServerIp: String,
     slowDnsNameserver: String,
     slowDnsPublicKey: String,
+    editingServerId: String?,
+  ) -> Unit,
+  onAddUdpServer: (
+    name: String,
+    host: String,
+    portRange: String,
+    password: String,
+    receiveWindow: Int,
     editingServerId: String?,
   ) -> Unit,
   onDeleteCustomServer: (String) -> Unit,
@@ -250,7 +259,7 @@ fun MainScreen(
           onSelectServer = onSelectServer,
           onPingSelected = onPingSelected,
           onOpenImportDialog = onOpenImportDialog,
-          onEditSshServer = onEditSshServer,
+          onEditServer = onEditServer,
           onOpenExportDialog = onOpenExportDialog,
           onCopyServer = { server ->
             if (!server.isLocked) {
@@ -323,6 +332,7 @@ fun MainScreen(
       onDismiss = onCloseImportDialog,
       onImportLink = onImportLink,
       onAddSshServer = onAddSshServer,
+      onAddUdpServer = onAddUdpServer,
       onExportServer = { server -> onOpenExportDialog(server) },
     )
   }
@@ -389,7 +399,7 @@ private fun TopHeaderBar(
           color = TextPrimary,
         )
         Text(
-          text = if (coreAvailable) "Xray & SSH Ready" else "SSH Ready · Xray Preview",
+          text = if (coreAvailable) "Xray · SSH · UDP Ready" else "SSH · UDP Ready",
           style = MaterialTheme.typography.labelSmall,
           color = if (coreAvailable) EmeraldShield else TextMuted,
         )
@@ -439,7 +449,7 @@ private fun ServerSelectorDropdown(
   onSelectServer: (VpnServer) -> Unit,
   onPingSelected: () -> Unit,
   onOpenImportDialog: () -> Unit,
-  onEditSshServer: (VpnServer) -> Unit,
+  onEditServer: (VpnServer) -> Unit,
   onOpenExportDialog: (VpnServer) -> Unit,
   onCopyServer: (VpnServer) -> Unit,
   onDeleteCustomServer: (String) -> Unit,
@@ -684,17 +694,17 @@ private fun ServerSelectorDropdown(
                         modifier = Modifier.size(17.dp),
                       )
                     }
-                    if (server.protocol == VpnProtocol.SSH) {
+                    if (server.protocol == VpnProtocol.SSH || server.protocol == VpnProtocol.UDP) {
                       IconButton(
                         onClick = {
                           expanded = false
-                          onEditSshServer(server)
+                          onEditServer(server)
                         },
-                        modifier = Modifier.size(36.dp).testTag("dropdown_edit_ssh_button"),
+                        modifier = Modifier.size(36.dp).testTag("dropdown_edit_server_button"),
                       ) {
                         Icon(
                           imageVector = Icons.Rounded.Tune,
-                          contentDescription = "Edit SSH config",
+                          contentDescription = "Edit config",
                           tint = AmberConnecting,
                           modifier = Modifier.size(17.dp),
                         )
@@ -759,6 +769,7 @@ private fun ProtocolBadge(protocol: VpnProtocol) {
       VpnProtocol.VLESS -> CyanPulse
       VpnProtocol.VMESS -> EmeraldShield
       VpnProtocol.SSH -> AmberConnecting
+      VpnProtocol.UDP -> VioletUdp
     }
   val bg = fg.copy(alpha = 0.16f)
   Box(

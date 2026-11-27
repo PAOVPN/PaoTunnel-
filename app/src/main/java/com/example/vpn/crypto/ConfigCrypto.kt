@@ -121,6 +121,8 @@ object ConfigCrypto {
         "slowDnsServerIp" to server.slowDnsServerIp,
         "slowDnsNameserver" to server.slowDnsNameserver,
         "slowDnsPublicKey" to server.slowDnsPublicKey,
+        "udpPortRange" to server.udpPortRange,
+        "udpReceiveWindow" to server.udpReceiveWindow.toString(),
       )
     return fields.joinToString("\n") { (k, v) ->
       "$k:${encodeBase64Url(v.toByteArray(StandardCharsets.UTF_8))}"
@@ -146,7 +148,7 @@ object ConfigCrypto {
     val protocol =
       runCatching { VpnProtocol.valueOf(map["protocol"].orEmpty()) }.getOrNull() ?: return null
     val address = map["address"].orEmpty().trim()
-    val port = map["port"]?.toIntOrNull() ?: 0
+    val port = map["port"]?.toIntOrNull() ?: if (protocol == VpnProtocol.UDP) 6000 else 0
     if (address.isEmpty() || port !in 1..65535) return null
 
     val rawId = map["id"].orEmpty().trim()
@@ -199,6 +201,8 @@ object ConfigCrypto {
       slowDnsServerIp = map["slowDnsServerIp"].orEmpty(),
       slowDnsNameserver = map["slowDnsNameserver"].orEmpty(),
       slowDnsPublicKey = map["slowDnsPublicKey"].orEmpty(),
+      udpPortRange = map["udpPortRange"].orEmpty().ifBlank { "6000-19999" },
+      udpReceiveWindow = (map["udpReceiveWindow"]?.toIntOrNull() ?: 2).coerceAtLeast(1),
       rawUri = rawLockedUri,
       isCustom = isCustom,
       isLocked = true,
