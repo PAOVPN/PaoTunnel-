@@ -17,6 +17,8 @@ object XrayCoreAdapterImpl : XrayCoreAdapter {
 
   private fun ensureXrayVlessEnv() {
     runCatching {
+      Os.setenv("xray.vless.allow_insecure", "1", true)
+      Os.setenv("XRAY_VLESS_ALLOW_INSECURE", "1", true)
       Os.setenv("xray.vless.allowInsecure", "true", true)
       Os.setenv("XRAY_VLESS_ALLOWINSECURE", "true", true)
     }

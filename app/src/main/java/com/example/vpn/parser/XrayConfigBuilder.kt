@@ -44,7 +44,7 @@ object XrayConfigBuilder {
         if (mappedDomain != null) {
           put("hosts", JSONObject().put(mappedDomain, server.address.trim()))
         }
-        put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8"))
+        put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8").put("localhost"))
         put("queryStrategy", "UseIPv4")
       },
     )
@@ -148,6 +148,37 @@ object XrayConfigBuilder {
     }
   }
 
+  private fun isPrivateOrLocalAddress(address: String): Boolean {
+    val clean = address.trim().trimEnd('.').lowercase()
+    if (clean.isEmpty()) return true
+    if (clean == "localhost" ||
+      clean.endsWith(".localhost") ||
+      clean.endsWith(".local") ||
+      clean.endsWith(".internal") ||
+      clean.endsWith(".lan") ||
+      clean.endsWith(".home.arpa")
+    ) {
+      return true
+    }
+    if (isIpv4Address(clean)) {
+      val parts = clean.split(".").mapNotNull { it.toIntOrNull() }
+      if (parts.size == 4) {
+        val a = parts[0]
+        val b = parts[1]
+        return a == 10 ||
+          a == 127 ||
+          (a == 172 && b in 16..31) ||
+          (a == 192 && b == 168) ||
+          (a == 169 && b == 254)
+      }
+    }
+    val unbracketed = clean.removePrefix("[").removeSuffix("]")
+    if (unbracketed == "::1" || unbracketed.startsWith("fc") || unbracketed.startsWith("fd") || unbracketed.startsWith("fe80:")) {
+      return true
+    }
+    return false
+  }
+
   private fun isPlainVless(server: VpnServer): Boolean {
     if (server.protocol != VpnProtocol.VLESS) return false
     val securityMode = server.tlsMode.trim().lowercase()
@@ -156,11 +187,15 @@ object XrayConfigBuilder {
 
   private fun resolvePlainVlessMappedDomain(server: VpnServer): String? {
     val cleanAddress = server.address.trim()
-    return if (isPlainVless(server) && isIpv4Address(cleanAddress)) {
-      "$cleanAddress.sslip.io"
-    } else {
-      null
-    }
+    if (!isPlainVless(server) || isPrivateOrLocalAddress(cleanAddress)) return null
+    val sanitized =
+      cleanAddress
+        .lowercase()
+        .replace(Regex("[^a-z0-9-]"), "-")
+        .replace(Regex("-+"), "-")
+        .trim('-')
+        .ifEmpty { "pao-node" }
+    return "$sanitized.local"
   }
 
   private fun resolveVlessOutboundAddress(server: VpnServer): String {
@@ -254,11 +289,16 @@ object XrayConfigBuilder {
       )
     }
 
+    val mappedPlainVless = resolvePlainVlessMappedDomain(server) != null
+    val effectiveHostHeader =
+      server.host.ifBlank { server.sni }.ifBlank {
+        if (mappedPlainVless) server.address.trim() else ""
+      }
+
     when (net) {
       "ws" -> {
         val headers = JSONObject()
-        val hostHeader = server.host.ifBlank { server.sni }
-        if (hostHeader.isNotBlank()) headers.put("Host", hostHeader)
+        if (effectiveHostHeader.isNotBlank()) headers.put("Host", effectiveHostHeader)
         stream.put(
           "wsSettings",
           JSONObject().apply {
@@ -281,8 +321,7 @@ object XrayConfigBuilder {
           "httpupgradeSettings",
           JSONObject().apply {
             put("path", server.path.ifBlank { "/" })
-            val hostHeader = server.host.ifBlank { server.sni }
-            if (hostHeader.isNotBlank()) put("host", hostHeader)
+            if (effectiveHostHeader.isNotBlank()) put("host", effectiveHostHeader)
           },
         )
       }
@@ -291,8 +330,7 @@ object XrayConfigBuilder {
           "xhttpSettings",
           JSONObject().apply {
             put("path", server.path.ifBlank { "/" })
-            val hostHeader = server.host.ifBlank { server.sni }
-            if (hostHeader.isNotBlank()) put("host", hostHeader)
+            if (effectiveHostHeader.isNotBlank()) put("host", effectiveHostHeader)
             if (server.mode.isNotBlank()) put("mode", server.mode)
           },
         )
@@ -303,9 +341,8 @@ object XrayConfigBuilder {
           "httpSettings",
           JSONObject().apply {
             put("path", server.path.ifBlank { "/" })
-            val hostHeader = server.host.ifBlank { server.sni }
-            if (hostHeader.isNotBlank()) {
-              put("host", JSONArray().put(hostHeader))
+            if (effectiveHostHeader.isNotBlank()) {
+              put("host", JSONArray().put(effectiveHostHeader))
             }
           },
         )
@@ -313,9 +350,8 @@ object XrayConfigBuilder {
       else -> {
         if (server.headerType.equals("http", ignoreCase = true)) {
           val headers = JSONObject()
-          val hostHeader = server.host.ifBlank { server.sni }
-          if (hostHeader.isNotBlank()) {
-            headers.put("Host", JSONArray().put(hostHeader))
+          if (effectiveHostHeader.isNotBlank()) {
+            headers.put("Host", JSONArray().put(effectiveHostHeader))
           }
           stream.put(
             "tcpSettings",

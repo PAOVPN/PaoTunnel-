@@ -102,8 +102,13 @@ class ExampleRobolectricTest {
     val s443 = VpnLinkParser.parseUri(port443Uri)!!
 
     val cfg80 = JSONObject(XrayConfigBuilder.buildConfig(s80))
-    val stream80 = cfg80.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+    val outbound80 = cfg80.getJSONArray("outbounds").getJSONObject(0)
+    val vnext80 = outbound80.getJSONObject("settings").getJSONArray("vnext").getJSONObject(0)
+    assertEquals("example-com.local", vnext80.getString("address"))
+    assertEquals("example.com", cfg80.getJSONObject("dns").getJSONObject("hosts").getString("example-com.local"))
+    val stream80 = outbound80.getJSONObject("streamSettings")
     assertEquals("none", stream80.getString("security"))
+    assertEquals("UseIP", stream80.getJSONObject("sockopt").getString("domainStrategy"))
     assertFalse(stream80.has("tlsSettings"))
 
     val cfg443 = JSONObject(XrayConfigBuilder.buildConfig(s443))
@@ -113,7 +118,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `convert ipv4 address to sslip io when vless security is none or empty and map dns hosts`() {
+  fun `convert public ipv4 address to private local domain when vless security is none or empty and map dns hosts`() {
     val ipPort80Uri =
       "vless://11111111-2222-3333-4444-555555555555@157.85.103.29:80?encryption=none&security=&type=ws&host=bug.example.com&path=%2Fws#IP80"
     val ipPort443Uri =
@@ -123,11 +128,11 @@ class ExampleRobolectricTest {
     assertEquals("none", s80.tlsMode)
     val cfg80 = JSONObject(XrayConfigBuilder.buildConfig(s80))
     val dnsHosts80 = cfg80.getJSONObject("dns").getJSONObject("hosts")
-    assertEquals("157.85.103.29", dnsHosts80.getString("157.85.103.29.sslip.io"))
+    assertEquals("157.85.103.29", dnsHosts80.getString("157-85-103-29.local"))
 
     val outbound80 = cfg80.getJSONArray("outbounds").getJSONObject(0)
     val vnext80 = outbound80.getJSONObject("settings").getJSONArray("vnext").getJSONObject(0)
-    assertEquals("157.85.103.29.sslip.io", vnext80.getString("address"))
+    assertEquals("157-85-103-29.local", vnext80.getString("address"))
     val stream80 = outbound80.getJSONObject("streamSettings")
     assertEquals("UseIP", stream80.getJSONObject("sockopt").getString("domainStrategy"))
     val wsHost80 = stream80.getJSONObject("wsSettings").getJSONObject("headers").getString("Host")
