@@ -248,8 +248,8 @@ object VpnLinkParser {
     if (uuid.isEmpty() || address.isEmpty() || port <= 0) return null
 
     val params = parseQueryParams(queryStr)
-    val network = (params["type"] ?: "tcp").lowercase()
-    val securityMode = (params["security"] ?: "none").lowercase()
+    val network = params["type"]?.trim()?.lowercase()?.ifEmpty { "tcp" } ?: "tcp"
+    val securityMode = params["security"]?.trim()?.lowercase()?.ifEmpty { "none" } ?: "none"
     val sni = params["sni"] ?: params["peer"] ?: ""
     val host = params["host"] ?: ""
     val path = params["path"] ?: ""
@@ -471,7 +471,7 @@ object VpnLinkParser {
                 alterId = o.optInt("alterId", 0),
                 security = o.optString("security", "auto"),
                 network = o.optString("network", "tcp"),
-                tlsMode = o.optString("tlsMode", "none"),
+                tlsMode = o.optString("tlsMode", "none").trim().lowercase().ifEmpty { "none" },
                 sni = o.optString("sni", ""),
                 host = o.optString("host", ""),
                 path = o.optString("path", ""),

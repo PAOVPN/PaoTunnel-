@@ -37,9 +37,13 @@ object XrayConfigBuilder {
       },
     )
 
+    val mappedDomain = resolvePlainVlessMappedDomain(server)
     root.put(
       "dns",
       JSONObject().apply {
+        if (mappedDomain != null) {
+          put("hosts", JSONObject().put(mappedDomain, server.address.trim()))
+        }
         put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8"))
         put("queryStrategy", "UseIPv4")
       },
@@ -144,14 +148,23 @@ object XrayConfigBuilder {
     }
   }
 
-  private fun resolveVlessOutboundAddress(server: VpnServer): String {
-    val tlsMode = server.tlsMode.lowercase()
-    val isNoTls = tlsMode != "tls" && tlsMode != "reality"
-    return if (isNoTls && isIpv4Address(server.address)) {
-      "${server.address.trim()}.sslip.io"
+  private fun isPlainVless(server: VpnServer): Boolean {
+    if (server.protocol != VpnProtocol.VLESS) return false
+    val securityMode = server.tlsMode.trim().lowercase()
+    return securityMode != "tls" && securityMode != "reality"
+  }
+
+  private fun resolvePlainVlessMappedDomain(server: VpnServer): String? {
+    val cleanAddress = server.address.trim()
+    return if (isPlainVless(server) && isIpv4Address(cleanAddress)) {
+      "$cleanAddress.sslip.io"
     } else {
-      server.address
+      null
     }
+  }
+
+  private fun resolveVlessOutboundAddress(server: VpnServer): String {
+    return resolvePlainVlessMappedDomain(server) ?: server.address.trim()
   }
 
   private fun buildProxyOutbound(server: VpnServer): JSONObject {
@@ -205,8 +218,11 @@ object XrayConfigBuilder {
     val net = server.network.lowercase().ifBlank { "tcp" }
     stream.put("network", net)
 
-    val tlsMode = server.tlsMode.lowercase()
+    val tlsMode = server.tlsMode.trim().lowercase()
     stream.put("security", if (tlsMode == "tls" || tlsMode == "reality") tlsMode else "none")
+    if (resolvePlainVlessMappedDomain(server) != null) {
+      stream.put("sockopt", JSONObject().put("domainStrategy", "UseIP"))
+    }
 
     if (tlsMode == "tls") {
       val sni = server.sni.ifBlank { server.host.ifBlank { server.address } }
