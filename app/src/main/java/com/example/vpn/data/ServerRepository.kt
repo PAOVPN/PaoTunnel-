@@ -128,6 +128,8 @@ class ServerRepository(private val context: Context) {
     username: String,
     password: String,
     payload: String,
+    httpProxy: String = "",
+    editingServerId: String? = null,
   ): Result<VpnServer> =
     withContext(Dispatchers.IO) {
       runCatching {
@@ -137,6 +139,14 @@ class ServerRepository(private val context: Context) {
         require(port in 1..65535) { "Port must be between 1 and 65535." }
         require(cleanUser.isNotEmpty()) { "Username is required." }
 
+        val parsedProxy =
+          if (httpProxy.isBlank()) {
+            "" to 0
+          } else {
+            VpnLinkParser.parseProxyString(httpProxy)
+              ?: error("Invalid HTTP Proxy format. Use proxy_ip:proxy_port (e.g. 104.16.0.1:80).")
+          }
+
         val server =
           VpnLinkParser.createSshServer(
             name = name,
@@ -145,17 +155,21 @@ class ServerRepository(private val context: Context) {
             username = cleanUser,
             password = password,
             payload = payload,
+            sshProxyHost = parsedProxy.first,
+            sshProxyPort = parsedProxy.second,
             isCustom = true,
           )
-        saveCustomServer(server)
+        saveCustomServer(server, replaceServerId = editingServerId)
         server
       }
     }
 
-  private suspend fun saveCustomServer(server: VpnServer) {
+  private suspend fun saveCustomServer(server: VpnServer, replaceServerId: String? = null) {
     context.vpnDataStore.edit { prefs ->
       val existing = VpnLinkParser.fromStorageJson(prefs[KEY_CUSTOM_SERVERS].orEmpty())
-      val updated = listOf(server) + existing.filterNot { it.id == server.id }
+      val filtered =
+        existing.filterNot { it.id == server.id || (replaceServerId != null && it.id == replaceServerId) }
+      val updated = listOf(server) + filtered
       prefs[KEY_CUSTOM_SERVERS] = VpnLinkParser.toStorageJson(updated)
       prefs[KEY_SELECTED_SERVER_ID] = server.id
     }

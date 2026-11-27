@@ -99,21 +99,34 @@ internal object SshPayloadHelper {
 
 internal class PayloadSocketFactory(
   private val rawPayload: String,
+  private val proxyHost: String = "",
+  private val proxyPort: Int = 0,
   private val connectTimeoutMs: Int = 15_000,
 ) : SocketFactory {
 
   override fun createSocket(host: String, port: Int): Socket {
+    val useHttpProxy = proxyHost.isNotBlank() && proxyPort in 1..65535
+    val dialHost = if (useHttpProxy) proxyHost.trim() else host
+    val dialPort = if (useHttpProxy) proxyPort else port
+
     val socket = Socket()
     socket.tcpNoDelay = true
     socket.soTimeout = connectTimeoutMs
-    socket.connect(InetSocketAddress(host, port), connectTimeoutMs)
+    socket.connect(InetSocketAddress(dialHost, dialPort), connectTimeoutMs)
 
-    if (rawPayload.isBlank()) {
+    val effectiveTemplate =
+      when {
+        rawPayload.isNotBlank() -> rawPayload
+        useHttpProxy -> "CONNECT [host_port] [protocol][crlf]Host: [host_port][crlf][crlf]"
+        else -> ""
+      }
+
+    if (effectiveTemplate.isBlank()) {
       socket.soTimeout = 0
       return socket
     }
 
-    val formatted = SshPayloadHelper.formatPayload(rawPayload, host, port)
+    val formatted = SshPayloadHelper.formatPayload(effectiveTemplate, host, port)
     val segments = SshPayloadHelper.splitSegments(formatted)
     val out = socket.getOutputStream()
     for (segment in segments) {

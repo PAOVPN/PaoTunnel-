@@ -75,12 +75,23 @@ class MainActivity : ComponentActivity() {
           onConnectClick = initiateVpnConnect,
           onDisconnectClick = { viewModel.disconnectVpn(context) },
           onOpenImportDialog = { viewModel.openImportDialog() },
+          onEditSshServer = { server -> viewModel.openEditSshDialog(server) },
           onCloseImportDialog = { viewModel.closeImportDialog() },
           onImportLink = { link -> viewModel.importCustomServer(link) },
-          onAddSshServer = { name, host, port, username, password, payload ->
-            viewModel.addSshServer(name, host, port, username, password, payload)
+          onAddSshServer = { name, host, port, username, password, payload, httpProxy, editingId ->
+            viewModel.addSshServer(
+              name = name,
+              host = host,
+              port = port,
+              username = username,
+              password = password,
+              payload = payload,
+              httpProxy = httpProxy,
+              editingServerId = editingId,
+            )
           },
           onDeleteCustomServer = { id -> viewModel.deleteCustomServer(id) },
+          onShowMessage = { msg -> viewModel.showBannerMessage(msg) },
           onDismissMessage = { viewModel.dismissBannerMessage() },
         )
       }

@@ -45,14 +45,27 @@ data class VpnServer(
   val username: String = "",
   val password: String = "",
   val payload: String = "",
+  val sshProxyHost: String = "",
+  val sshProxyPort: Int = 0,
   val rawUri: String = "",
   val isCustom: Boolean = false,
   val latencyMs: Long? = null,
 ) {
+  val sshProxyDisplay: String
+    get() = if (sshProxyHost.isNotBlank() && sshProxyPort > 0) "$sshProxyHost:$sshProxyPort" else ""
+
   val transportSummary: String
     get() {
       if (protocol == VpnProtocol.SSH) {
-        val modeLabel = if (payload.isNotBlank()) "PAYLOAD" else "DIRECT"
+        val hasProxy = sshProxyHost.isNotBlank() && sshProxyPort > 0
+        val hasPayload = payload.isNotBlank()
+        val modeLabel =
+          when {
+            hasProxy && hasPayload -> "PROXY · PAYLOAD"
+            hasProxy -> "HTTP PROXY"
+            hasPayload -> "PAYLOAD"
+            else -> "DIRECT"
+          }
         val userPrefix = if (username.isNotBlank()) "$username · " else ""
         return "${userPrefix}$modeLabel"
       }

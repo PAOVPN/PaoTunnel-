@@ -4,6 +4,7 @@ import android.util.Base64
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.json.JSONArray
@@ -44,31 +45,47 @@ object VpnLinkParser {
   }
 
   private fun parseJsonServers(jsonText: String): List<VpnServer> {
-    val results = mutableListOf<VpnServer>()
-    if (jsonText.startsWith("[")) {
-      val array = JSONArray(jsonText)
-      for (i in 0 until array.length()) {
-        parseJsonArrayItem(array.opt(i))?.let { results.add(it) }
-      }
-    } else if (jsonText.startsWith("{")) {
-      val root = JSONObject(jsonText)
-      val arrayKeys = listOf("servers", "data", "list", "nodes", "configs", "items", "results")
-      var handled = false
-      for (key in arrayKeys) {
-        val arr = root.optJSONArray(key)
-        if (arr != null) {
-          handled = true
-          for (i in 0 until arr.length()) {
-            parseJsonArrayItem(arr.opt(i))?.let { results.add(it) }
+    return runCatching {
+        val results = mutableListOf<VpnServer>()
+        if (jsonText.startsWith("[")) {
+          val array = JSONArray(jsonText)
+          for (i in 0 until array.length()) {
+            parseJsonArrayItem(array.opt(i))?.let { results.add(it) }
+          }
+        } else if (jsonText.startsWith("{")) {
+          val root = JSONObject(jsonText)
+          val arrayKeys =
+            listOf(
+              "servers",
+              "data",
+              "list",
+              "nodes",
+              "configs",
+              "items",
+              "results",
+              "ssh",
+              "v2ray",
+              "links",
+              "proxies",
+            )
+          var handled = false
+          for (key in arrayKeys) {
+            val arr = root.optJSONArray(key)
+            if (arr != null) {
+              handled = true
+              for (i in 0 until arr.length()) {
+                parseJsonArrayItem(arr.opt(i))?.let { results.add(it) }
+              }
+            }
+          }
+          if (!handled) {
+            // Check if root itself is a single server object
+            parseJsonObjectServer(root)?.let { results.add(it) }
           }
         }
+        results
       }
-      if (!handled) {
-        // Check if root itself is a single server object
-        parseJsonObjectServer(root)?.let { results.add(it) }
-      }
-    }
-    return results
+      .getOrDefault(emptyList())
   }
 
   private fun parseJsonArrayItem(item: Any?): VpnServer? {
@@ -90,19 +107,28 @@ object VpnLinkParser {
         obj.optString("serverName"),
       )
 
-    // Case A: Object wraps a share link under url/link/config/uri/vless/vmess/node
+    // Case A: Object wraps a share link under url/link/config/uri/vless/vmess/ssh/node
     val linkCandidate =
-      firstNonBlank(
-        obj.optString("url"),
-        obj.optString("link"),
-        obj.optString("uri"),
-        obj.optString("config"),
-        obj.optString("shareLink"),
-        obj.optString("vless"),
-        obj.optString("vmess"),
-        obj.optString("node"),
-        obj.optString("payload"),
-      )
+      listOf(
+          obj.optString("url"),
+          obj.optString("link"),
+          obj.optString("uri"),
+          obj.optString("config"),
+          obj.optString("shareLink"),
+          obj.optString("vless"),
+          obj.optString("vmess"),
+          obj.optString("ssh"),
+          obj.optString("node"),
+        )
+        .map { it.trim() }
+        .firstOrNull { candidate ->
+          candidate.isNotEmpty() &&
+            candidate != "null" &&
+            (candidate.startsWith("vless://", ignoreCase = true) ||
+              candidate.startsWith("vmess://", ignoreCase = true) ||
+              candidate.startsWith("ssh://", ignoreCase = true))
+        }
+        .orEmpty()
     if (linkCandidate.isNotEmpty()) {
       val parsed = parseUri(linkCandidate, isCustom = false)
       if (parsed != null) {
@@ -141,7 +167,10 @@ object VpnLinkParser {
       val port = obj.optInt("port", obj.optString("port").toIntOrNull() ?: 22)
       val username = firstNonBlank(obj.optString("username"), obj.optString("user"))
       val password = firstNonBlank(obj.optString("password"), obj.optString("pass"))
-      val payload = obj.optString("payload").trim()
+      val rawPayload = obj.optString("payload").trim().let { if (it == "null") "" else decodeBase64PayloadSafely(it) }
+      val proxyString =
+        firstNonBlank(obj.optString("proxy"), obj.optString("httpProxy"), obj.optString("remoteProxy"))
+      val (proxyHost, proxyPort) = parseProxyHostPort(proxyString, obj.optString("proxyHost"), obj.optInt("proxyPort", 0))
       if (host.isEmpty() || port <= 0 || username.isEmpty()) return null
       val flag = obj.optString("flag").trim()
       val displayName =
@@ -157,7 +186,9 @@ object VpnLinkParser {
         port = port,
         username = username,
         password = password,
-        payload = payload,
+        payload = rawPayload,
+        sshProxyHost = proxyHost,
+        sshProxyPort = proxyPort,
         isCustom = false,
       )
     }
@@ -273,26 +304,91 @@ object VpnLinkParser {
     username: String,
     password: String,
     payload: String,
+    sshProxyHost: String = "",
+    sshProxyPort: Int = 0,
     isCustom: Boolean = true,
   ): VpnServer {
     val cleanHost = host.trim()
     val cleanUser = username.trim()
     val cleanPayload = payload.trim()
+    val cleanProxyHost = sshProxyHost.trim()
+    val cleanProxyPort = if (cleanProxyHost.isNotEmpty() && sshProxyPort in 1..65535) sshProxyPort else 0
     val displayName = name.trim().ifBlank { "SSH · $cleanHost:$port" }
-    val id = stableId("SSH|$cleanHost|$port|$cleanUser|$cleanPayload")
-    return VpnServer(
-      id = id,
-      name = displayName,
-      protocol = VpnProtocol.SSH,
-      address = cleanHost,
-      port = port,
-      network = "ssh",
-      tlsMode = if (cleanPayload.isNotEmpty()) "payload" else "none",
-      username = cleanUser,
-      password = password,
-      payload = cleanPayload,
-      isCustom = isCustom,
-    )
+    val id = stableId("SSH|$cleanHost|$port|$cleanUser|$cleanProxyHost:$cleanProxyPort|$cleanPayload")
+    val server =
+      VpnServer(
+        id = id,
+        name = displayName,
+        protocol = VpnProtocol.SSH,
+        address = cleanHost,
+        port = port,
+        network = "ssh",
+        tlsMode = if (cleanPayload.isNotEmpty()) "payload" else "none",
+        username = cleanUser,
+        password = password,
+        payload = cleanPayload,
+        sshProxyHost = cleanProxyHost,
+        sshProxyPort = cleanProxyPort,
+        isCustom = isCustom,
+      )
+    return server.copy(rawUri = toSshUri(server))
+  }
+
+  fun toSshUri(server: VpnServer): String {
+    val userPart = urlEncode(server.username)
+    val passPart = urlEncode(server.password)
+    val hostPart =
+      if (server.address.contains(":") && !server.address.startsWith("[")) {
+        "[${server.address.trim()}]"
+      } else {
+        server.address.trim()
+      }
+    val queryParts = mutableListOf<String>()
+    if (server.sshProxyHost.isNotBlank() && server.sshProxyPort in 1..65535) {
+      val proxyHostPort = "${server.sshProxyHost.trim()}:${server.sshProxyPort}"
+      queryParts.add("proxy=${urlEncode(proxyHostPort)}")
+    }
+    if (server.payload.isNotBlank()) {
+      val encodedPayload =
+        Base64.encodeToString(
+          server.payload.toByteArray(StandardCharsets.UTF_8),
+          Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )
+      queryParts.add("payload=$encodedPayload")
+    }
+    val querySuffix = if (queryParts.isNotEmpty()) "?${queryParts.joinToString("&")}" else ""
+    val remarkSuffix = if (server.name.isNotBlank()) "#${urlEncode(server.name)}" else ""
+    return "ssh://$userPart:$passPart@$hostPart:${server.port}$querySuffix$remarkSuffix"
+  }
+
+  fun parseProxyString(rawProxy: String): Pair<String, Int>? {
+    val cleaned = rawProxy.trim()
+    if (cleaned.isEmpty()) return null
+    val withoutScheme =
+      cleaned.removePrefix("http://").removePrefix("https://").trimEnd('/')
+    parseHostPort(withoutScheme)?.let { (h, p) ->
+      if (h.isNotBlank() && p in 1..65535) return h.trim() to p
+    }
+    if (!withoutScheme.contains(":") && withoutScheme.isNotBlank()) {
+      return withoutScheme to 8080
+    }
+    return null
+  }
+
+  private fun parseProxyHostPort(
+    proxyString: String,
+    explicitHost: String,
+    explicitPort: Int,
+  ): Pair<String, Int> {
+    parseProxyString(proxyString)?.let { return it }
+    val cleanHost = explicitHost.trim().let { if (it == "null") "" else it }
+    return if (cleanHost.isNotEmpty() && explicitPort in 1..65535) {
+      cleanHost to explicitPort
+    } else if (cleanHost.isNotEmpty()) {
+      cleanHost to 8080
+    } else {
+      "" to 0
+    }
   }
 
   private fun parseSsh(uri: String, isCustom: Boolean): VpnServer? {
@@ -324,7 +420,11 @@ object VpnLinkParser {
         }
     if (username.isEmpty() || host.isEmpty() || port <= 0) return null
 
-    val payload = params["payload"].orEmpty()
+    val rawProxyParam = params["proxy"] ?: params["httpProxy"] ?: ""
+    val (proxyHost, proxyPort) = parseProxyHostPort(rawProxyParam, "", 0)
+    val rawPayloadParam = params["payload"].orEmpty()
+    val decodedPayload = decodeBase64PayloadSafely(rawPayloadParam)
+
     val server =
       createSshServer(
         name = rawRemark,
@@ -332,7 +432,9 @@ object VpnLinkParser {
         port = port,
         username = username,
         password = password,
-        payload = payload,
+        payload = decodedPayload,
+        sshProxyHost = proxyHost,
+        sshProxyPort = proxyPort,
         isCustom = isCustom,
       )
     return server.copy(rawUri = uri)
@@ -483,9 +585,35 @@ object VpnLinkParser {
     return map
   }
 
+  private fun urlEncode(value: String): String {
+    return runCatching { URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20") }
+      .getOrDefault(value)
+  }
+
   private fun urlDecode(value: String): String {
     return runCatching { URLDecoder.decode(value, StandardCharsets.UTF_8.name()) }
       .getOrDefault(value)
+  }
+
+  private fun decodeBase64PayloadSafely(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return ""
+    // If already looks like plain-text payload template, keep as-is
+    if (trimmed.contains("[crlf]", ignoreCase = true) ||
+      trimmed.contains("[host", ignoreCase = true) ||
+      trimmed.contains("\n") ||
+      trimmed.contains("\r") ||
+      trimmed.contains(" ")
+    ) {
+      return trimmed
+    }
+    val decoded = decodeBase64Flexible(trimmed) ?: return trimmed
+    val looksValidText =
+      decoded.isNotEmpty() &&
+        decoded.none { ch ->
+          ch == '\uFFFD' || (ch.code < 0x20 && ch != '\r' && ch != '\n' && ch != '\t')
+        }
+    return if (looksValidText) decoded else trimmed
   }
 
   private fun decodeBase64Flexible(raw: String): String? {
@@ -552,6 +680,8 @@ object VpnLinkParser {
           put("username", s.username)
           put("password", s.password)
           put("payload", s.payload)
+          put("sshProxyHost", s.sshProxyHost)
+          put("sshProxyPort", s.sshProxyPort)
           put("rawUri", s.rawUri)
           put("isCustom", s.isCustom)
           if (s.latencyMs != null) put("latencyMs", s.latencyMs)
@@ -600,6 +730,8 @@ object VpnLinkParser {
                 username = o.optString("username", ""),
                 password = o.optString("password", ""),
                 payload = o.optString("payload", ""),
+                sshProxyHost = o.optString("sshProxyHost", ""),
+                sshProxyPort = o.optInt("sshProxyPort", 0),
                 rawUri = o.optString("rawUri", ""),
                 isCustom = o.optBoolean("isCustom", false),
                 latencyMs = if (o.has("latencyMs")) o.optLong("latencyMs") else null,

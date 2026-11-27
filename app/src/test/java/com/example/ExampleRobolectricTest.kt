@@ -198,4 +198,51 @@ class ExampleRobolectricTest {
       )
     assertEquals("CONNECT 157.85.103.29:443 HTTP/1.1\r\nHost: 157.85.103.29\r\n\r\n", formattedPayload)
   }
+
+  @Test
+  fun `parse and export ssh link with proxy and base64 payload and mixed subscription`() {
+    val rawPayload = "GET / HTTP/1.1[crlf]Host: bug.example.com[crlf]Upgrade: websocket[crlf][crlf]"
+    val b64Payload =
+      Base64.encodeToString(
+        rawPayload.toByteArray(StandardCharsets.UTF_8),
+        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+      )
+    val sshLink =
+      "ssh://pao_user:pass%40123@157.85.103.29:443?proxy=104.16.0.1%3A80&payload=$b64Payload#Myanmar%20SSH"
+
+    val parsedSsh = VpnLinkParser.parseUri(sshLink, isCustom = true)!!
+    assertEquals(VpnProtocol.SSH, parsedSsh.protocol)
+    assertEquals("Myanmar SSH", parsedSsh.name)
+    assertEquals("157.85.103.29", parsedSsh.address)
+    assertEquals(443, parsedSsh.port)
+    assertEquals("pao_user", parsedSsh.username)
+    assertEquals("pass@123", parsedSsh.password)
+    assertEquals("104.16.0.1", parsedSsh.sshProxyHost)
+    assertEquals(80, parsedSsh.sshProxyPort)
+    assertEquals("104.16.0.1:80", parsedSsh.sshProxyDisplay)
+    assertEquals(rawPayload, parsedSsh.payload)
+
+    val exportedUri = VpnLinkParser.toSshUri(parsedSsh)
+    assertTrue(exportedUri.startsWith("ssh://pao_user:"))
+    val reparsed = VpnLinkParser.parseUri(exportedUri, isCustom = true)!!
+    assertEquals(parsedSsh.address, reparsed.address)
+    assertEquals(parsedSsh.port, reparsed.port)
+    assertEquals(parsedSsh.username, reparsed.username)
+    assertEquals(parsedSsh.password, reparsed.password)
+    assertEquals(parsedSsh.sshProxyDisplay, reparsed.sshProxyDisplay)
+    assertEquals(parsedSsh.payload, reparsed.payload)
+    assertEquals(parsedSsh.name, reparsed.name)
+
+    val mixedSubscription =
+      """
+      vless://11111111-2222-3333-4444-555555555555@sg.example.com:443?encryption=none&security=tls#V2Ray%20SG
+      $sshLink
+      """
+        .trimIndent()
+    val subServers = VpnLinkParser.parseServersPayload(mixedSubscription)
+    assertEquals(2, subServers.size)
+    assertEquals(VpnProtocol.VLESS, subServers[0].protocol)
+    assertEquals(VpnProtocol.SSH, subServers[1].protocol)
+    assertEquals("104.16.0.1:80", subServers[1].sshProxyDisplay)
+  }
 }

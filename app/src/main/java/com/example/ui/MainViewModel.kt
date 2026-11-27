@@ -29,6 +29,7 @@ data class MainUiState(
   val lastUpdatedMs: Long? = null,
   val statusBannerMessage: String? = null,
   val showImportDialog: Boolean = false,
+  val editingServer: VpnServer? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -40,6 +41,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isPinging: Boolean = false,
     val statusBannerMessage: String? = null,
     val showImportDialog: Boolean = false,
+    val editingServer: VpnServer? = null,
   )
 
   private val transientState = MutableStateFlow(TransientUiState())
@@ -62,6 +64,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           lastUpdatedMs = lastUpdatedMs,
           statusBannerMessage = transient.statusBannerMessage,
           showImportDialog = transient.showImportDialog,
+          editingServer = transient.editingServer,
         )
       }
       .stateIn(
@@ -129,11 +132,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun openImportDialog() {
-    transientState.update { it.copy(showImportDialog = true) }
+    transientState.update { it.copy(showImportDialog = true, editingServer = null) }
+  }
+
+  fun openEditSshDialog(server: VpnServer) {
+    transientState.update { it.copy(showImportDialog = true, editingServer = server) }
   }
 
   fun closeImportDialog() {
-    transientState.update { it.copy(showImportDialog = false) }
+    transientState.update { it.copy(showImportDialog = false, editingServer = null) }
   }
 
   fun importCustomServer(rawLink: String) {
@@ -144,6 +151,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           transientState.update {
             it.copy(
               showImportDialog = false,
+              editingServer = null,
               statusBannerMessage = "Imported ${server.protocol.displayName}: ${server.name}",
             )
           }
@@ -163,6 +171,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     username: String,
     password: String,
     payload: String,
+    httpProxy: String,
+    editingServerId: String?,
   ) {
     viewModelScope.launch {
       repository
@@ -173,12 +183,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           username = username,
           password = password,
           payload = payload,
+          httpProxy = httpProxy,
+          editingServerId = editingServerId,
         )
         .onSuccess { server ->
           transientState.update {
             it.copy(
               showImportDialog = false,
-              statusBannerMessage = "Added SSH Server: ${server.name}",
+              editingServer = null,
+              statusBannerMessage =
+                if (editingServerId != null) {
+                  "Updated SSH Server: ${server.name}"
+                } else {
+                  "Added SSH Server: ${server.name}"
+                },
             )
           }
         }
@@ -188,6 +206,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           }
         }
     }
+  }
+
+  fun showBannerMessage(message: String) {
+    transientState.update { it.copy(statusBannerMessage = message) }
   }
 
   fun deleteCustomServer(serverId: String) {

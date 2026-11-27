@@ -15,12 +15,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -29,6 +29,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -63,6 +64,9 @@ import com.example.ui.theme.SlateOutline
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.vpn.model.VpnProtocol
+import com.example.vpn.model.VpnServer
+import com.example.vpn.parser.VpnLinkParser
 
 private enum class AddServerTab {
   V2RAY_LINK,
@@ -71,6 +75,7 @@ private enum class AddServerTab {
 
 @Composable
 fun AddServerDialog(
+  editingServer: VpnServer? = null,
   onDismiss: () -> Unit,
   onImportLink: (String) -> Unit,
   onAddSshServer: (
@@ -80,18 +85,35 @@ fun AddServerDialog(
     username: String,
     password: String,
     payload: String,
+    httpProxy: String,
+    editingServerId: String?,
   ) -> Unit,
+  onCopySshUri: (String) -> Unit = {},
 ) {
-  var activeTab by remember { mutableStateOf(AddServerTab.V2RAY_LINK) }
+  val isEditingSsh = editingServer?.protocol == VpnProtocol.SSH
+  var activeTab by
+    remember(editingServer?.id) {
+      mutableStateOf(if (isEditingSsh) AddServerTab.SSH_FORM else AddServerTab.V2RAY_LINK)
+    }
   var linkInput by remember { mutableStateOf("") }
 
-  var sshName by remember { mutableStateOf("") }
-  var sshHost by remember { mutableStateOf("") }
-  var sshPortText by remember { mutableStateOf("22") }
-  var sshUsername by remember { mutableStateOf("") }
-  var sshPassword by remember { mutableStateOf("") }
+  var sshName by remember(editingServer?.id) { mutableStateOf(editingServer?.name.orEmpty()) }
+  var sshHost by remember(editingServer?.id) { mutableStateOf(editingServer?.address.orEmpty()) }
+  var sshPortText by
+    remember(editingServer?.id) {
+      mutableStateOf(
+        if (editingServer != null && editingServer.port > 0) editingServer.port.toString() else "22"
+      )
+    }
+  var sshUsername by
+    remember(editingServer?.id) { mutableStateOf(editingServer?.username.orEmpty()) }
+  var sshPassword by
+    remember(editingServer?.id) { mutableStateOf(editingServer?.password.orEmpty()) }
   var passwordVisible by remember { mutableStateOf(false) }
-  var sshPayload by remember { mutableStateOf("") }
+  var sshHttpProxy by
+    remember(editingServer?.id) { mutableStateOf(editingServer?.sshProxyDisplay.orEmpty()) }
+  var sshPayload by
+    remember(editingServer?.id) { mutableStateOf(editingServer?.payload.orEmpty()) }
 
   val parsedSshPort = sshPortText.trim().toIntOrNull()
   val isSshValid =
@@ -115,7 +137,7 @@ fun AddServerDialog(
     textContentColor = TextSecondary,
     title = {
       Text(
-        text = stringResource(R.string.import_link),
+        text = if (isEditingSsh) "SSH Server Config" else stringResource(R.string.import_link),
         style = MaterialTheme.typography.titleLarge,
       )
     },
@@ -132,7 +154,7 @@ fun AddServerDialog(
           horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
           ProtocolTabButton(
-            label = "V2Ray Link",
+            label = "V2Ray / SSH Link",
             selected = activeTab == AddServerTab.V2RAY_LINK,
             accentColor = CyanPulse,
             onClick = { activeTab = AddServerTab.V2RAY_LINK },
@@ -161,7 +183,7 @@ fun AddServerDialog(
             onValueChange = { linkInput = it },
             placeholder = {
               Text(
-                text = "vless://... or vmess://... or ssh://...",
+                text = "vless://... or vmess://... or ssh://user:pass@host:port?proxy=ip:port&payload=...",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextMuted,
               )
@@ -175,7 +197,7 @@ fun AddServerDialog(
           Column(
             modifier =
               Modifier.fillMaxWidth()
-                .heightIn(max = 410.dp)
+                .heightIn(max = 420.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
@@ -270,6 +292,16 @@ fun AddServerDialog(
             )
 
             OutlinedTextField(
+              value = sshHttpProxy,
+              onValueChange = { sshHttpProxy = it },
+              label = { Text("HTTP Proxy (Optional · IP:Port)") },
+              placeholder = { Text("104.16.0.1:80", color = TextMuted) },
+              singleLine = true,
+              colors = fieldColors,
+              modifier = Modifier.fillMaxWidth().testTag("ssh_proxy_input"),
+            )
+
+            OutlinedTextField(
               value = sshPayload,
               onValueChange = { sshPayload = it },
               label = { Text("Payload (Custom HTTP Header)") },
@@ -321,6 +353,38 @@ fun AddServerDialog(
                 },
               )
             }
+
+            if (isSshValid) {
+              val parsedProxy = VpnLinkParser.parseProxyString(sshHttpProxy)
+              OutlinedButton(
+                onClick = {
+                  val previewServer =
+                    VpnLinkParser.createSshServer(
+                      name = sshName,
+                      host = sshHost,
+                      port = parsedSshPort ?: 22,
+                      username = sshUsername,
+                      password = sshPassword,
+                      payload = sshPayload,
+                      sshProxyHost = parsedProxy?.first.orEmpty(),
+                      sshProxyPort = parsedProxy?.second ?: 0,
+                      isCustom = true,
+                    )
+                  onCopySshUri(VpnLinkParser.toSshUri(previewServer))
+                },
+                border = BorderStroke(1.dp, CyanPulse.copy(alpha = 0.45f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanPulse),
+                modifier = Modifier.fillMaxWidth().testTag("ssh_dialog_copy_link_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.ContentCopy,
+                  contentDescription = "Copy ssh link",
+                  modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.size(6.dp))
+                Text("Copy ssh:// Link", style = MaterialTheme.typography.labelLarge)
+              }
+            }
           }
         }
       }
@@ -345,13 +409,15 @@ fun AddServerDialog(
               sshUsername,
               sshPassword,
               sshPayload,
+              sshHttpProxy,
+              editingServer?.id,
             )
           },
           enabled = isSshValid,
           colors = ButtonDefaults.buttonColors(containerColor = AmberConnecting, contentColor = ObsidianBg),
           modifier = Modifier.testTag("ssh_save_button"),
         ) {
-          Text("Save SSH", style = MaterialTheme.typography.labelLarge)
+          Text(if (isEditingSsh) "Update SSH" else "Save SSH", style = MaterialTheme.typography.labelLarge)
         }
       }
     },

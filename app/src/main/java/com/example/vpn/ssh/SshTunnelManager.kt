@@ -55,7 +55,13 @@ object SshTunnelManager {
       sshSession.setConfig("StrictHostKeyChecking", "no")
       sshSession.setConfig("PreferredAuthentications", "password,keyboard-interactive")
       sshSession.userInfo = PasswordUserInfo(server.password)
-      sshSession.setSocketFactory(PayloadSocketFactory(server.payload))
+      sshSession.setSocketFactory(
+        PayloadSocketFactory(
+          rawPayload = server.payload,
+          proxyHost = server.sshProxyHost,
+          proxyPort = server.sshProxyPort,
+        )
+      )
       sshSession.setTimeout(20_000)
       sshSession.setServerAliveInterval(15_000)
       sshSession.setServerAliveCountMax(3)
