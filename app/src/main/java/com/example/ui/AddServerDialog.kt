@@ -185,10 +185,8 @@ fun AddServerDialog(
     remember(safeEditingServer?.id) { mutableStateOf(if (isEditingUdp) safeEditingServer?.name.orEmpty() else "") }
   var udpHost by
     remember(safeEditingServer?.id) { mutableStateOf(if (isEditingUdp) safeEditingServer?.address.orEmpty() else "") }
-  var udpPortRange by
-    remember(safeEditingServer?.id) {
-      mutableStateOf(if (isEditingUdp) safeEditingServer?.effectiveUdpPortRange ?: "6000-19999" else "6000-19999")
-    }
+  val defaultUdpPortRange =
+    if (isEditingUdp) safeEditingServer?.effectiveUdpPortRange ?: "6000-19999" else "6000-19999"
   var udpPassword by
     remember(safeEditingServer?.id) { mutableStateOf(if (isEditingUdp) safeEditingServer?.password.orEmpty() else "") }
   var udpPasswordVisible by remember { mutableStateOf(false) }
@@ -219,11 +217,9 @@ fun AddServerDialog(
         sshUsername.isNotBlank()
     }
 
-  val parsedUdpRange = VpnLinkParser.sanitizeUdpPortRange(udpPortRange)
   val isUdpValid =
     udpHost.isNotBlank() &&
       udpPassword.isNotEmpty() &&
-      parsedUdpRange != null &&
       udpReceiveWindow in 1..64
 
   val fieldColors =
@@ -658,35 +654,10 @@ fun AddServerDialog(
                 value = udpHost,
                 onValueChange = { udpHost = it },
                 label = { Text("UDP Server (Host / IP)") },
-                placeholder = { Text("157.85.103.29", color = TextMuted) },
+                placeholder = { Text("vps.example.com or 157.85.103.29", color = TextMuted) },
                 singleLine = true,
                 colors = fieldColors,
                 modifier = Modifier.fillMaxWidth().testTag("udp_host_input"),
-              )
-
-              OutlinedTextField(
-                value = udpPortRange,
-                onValueChange = { input ->
-                  udpPortRange = input.filter { it.isDigit() || it == '-' }.take(11)
-                },
-                label = { Text("UDP Port / Port Range (Optional)") },
-                placeholder = { Text("6000-19999", color = TextMuted) },
-                supportingText = {
-                  Text(
-                    text =
-                      if (parsedUdpRange != null) {
-                        "Default ZIVPN range: 6000-19999"
-                      } else {
-                        "Enter a port (e.g. 36712) or range (e.g. 6000-19999)"
-                      },
-                    color = if (parsedUdpRange != null) TextMuted else AmberConnecting,
-                    style = MaterialTheme.typography.labelSmall,
-                  )
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-                colors = fieldColors,
-                modifier = Modifier.fillMaxWidth().testTag("udp_port_range_input"),
               )
 
               OutlinedTextField(
@@ -800,7 +771,7 @@ fun AddServerDialog(
                       VpnLinkParser.createUdpServer(
                         name = udpName,
                         host = udpHost,
-                        portRange = parsedUdpRange?.first ?: "6000-19999",
+                        portRange = defaultUdpPortRange,
                         password = udpPassword,
                         receiveWindow = udpReceiveWindow,
                         isCustom = true,
@@ -868,7 +839,7 @@ fun AddServerDialog(
               onAddUdpServer(
                 udpName,
                 udpHost,
-                parsedUdpRange?.first ?: "6000-19999",
+                defaultUdpPortRange,
                 udpPassword,
                 udpReceiveWindow,
                 safeEditingServer?.id,

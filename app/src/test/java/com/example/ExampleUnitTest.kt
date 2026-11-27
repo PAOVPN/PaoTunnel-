@@ -311,6 +311,33 @@ class ExampleUnitTest {
       cmd,
     )
 
+    val domainServer =
+      com.example.vpn.parser.VpnLinkParser.createUdpServer(
+        name = "MM ZIVPN",
+        host = "vps.hiinternetvps.xyz",
+        password = "zivpn_secret",
+        receiveWindow = 2,
+      )
+    val domainJsonPrimary =
+      com.example.vpn.udp.HysteriaUdpManager.buildConfigJson(
+        server = domainServer,
+        resolvedIp = "157.85.103.29",
+      )
+    assertTrue(domainJsonPrimary.contains("\"server\": \"157.85.103.29:6000-19999\""))
+    assertTrue(domainJsonPrimary.contains("\"server_name\": \"vps.hiinternetvps.xyz\""))
+    assertTrue(domainJsonPrimary.contains("\"obfs\": \"zivpn_secret\""))
+    assertTrue(domainJsonPrimary.contains("\"auth_str\": \"zivpn_secret\""))
+    assertTrue(!domainJsonPrimary.contains("hu://"))
+
+    val domainJsonFallback =
+      com.example.vpn.udp.HysteriaUdpManager.buildConfigJson(
+        server = domainServer,
+        resolvedIp = "157.85.103.29",
+        portOverride = com.example.vpn.udp.HysteriaUdpManager.FALLBACK_PORT,
+      )
+    assertTrue(domainJsonFallback.contains("\"server\": \"157.85.103.29:5667\""))
+    assertTrue(domainJsonFallback.contains("\"server_name\": \"vps.hiinternetvps.xyz\""))
+
     val lockedLink = com.example.vpn.crypto.ConfigCrypto.encryptServerToLink(parsedCustomRange)
     assertTrue(lockedLink.startsWith("paolock://"))
     assertTrue(!lockedLink.contains("45.32.1.2"))
