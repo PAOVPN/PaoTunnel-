@@ -125,8 +125,42 @@ object VpnLinkParser {
       when (protocolStr) {
         "vless" -> VpnProtocol.VLESS
         "vmess" -> VpnProtocol.VMESS
+        "ssh" -> VpnProtocol.SSH
         else -> return null
       }
+
+    if (protocol == VpnProtocol.SSH) {
+      val host =
+        firstNonBlank(
+          obj.optString("host"),
+          obj.optString("address"),
+          obj.optString("add"),
+          obj.optString("ip"),
+          obj.optString("server"),
+        )
+      val port = obj.optInt("port", obj.optString("port").toIntOrNull() ?: 22)
+      val username = firstNonBlank(obj.optString("username"), obj.optString("user"))
+      val password = firstNonBlank(obj.optString("password"), obj.optString("pass"))
+      val payload = obj.optString("payload").trim()
+      if (host.isEmpty() || port <= 0 || username.isEmpty()) return null
+      val flag = obj.optString("flag").trim()
+      val displayName =
+        when {
+          overrideName.isNotEmpty() && flag.isNotEmpty() && !overrideName.contains(flag) ->
+            "$flag $overrideName"
+          overrideName.isNotEmpty() -> overrideName
+          else -> "SSH · $host:$port"
+        }
+      return createSshServer(
+        name = displayName,
+        host = host,
+        port = port,
+        username = username,
+        password = password,
+        payload = payload,
+        isCustom = false,
+      )
+    }
 
     val address =
       firstNonBlank(
@@ -212,7 +246,8 @@ object VpnLinkParser {
       .mapNotNull { line ->
         val cleaned = line.trim()
         if (cleaned.startsWith("vless://", ignoreCase = true) ||
-          cleaned.startsWith("vmess://", ignoreCase = true)
+          cleaned.startsWith("vmess://", ignoreCase = true) ||
+          cleaned.startsWith("ssh://", ignoreCase = true)
         ) {
           parseUri(cleaned, isCustom = false)
         } else {
@@ -226,8 +261,81 @@ object VpnLinkParser {
     return when {
       trimmed.startsWith("vless://", ignoreCase = true) -> parseVless(trimmed, isCustom)
       trimmed.startsWith("vmess://", ignoreCase = true) -> parseVmess(trimmed, isCustom)
+      trimmed.startsWith("ssh://", ignoreCase = true) -> parseSsh(trimmed, isCustom)
       else -> null
     }
+  }
+
+  fun createSshServer(
+    name: String,
+    host: String,
+    port: Int,
+    username: String,
+    password: String,
+    payload: String,
+    isCustom: Boolean = true,
+  ): VpnServer {
+    val cleanHost = host.trim()
+    val cleanUser = username.trim()
+    val cleanPayload = payload.trim()
+    val displayName = name.trim().ifBlank { "SSH · $cleanHost:$port" }
+    val id = stableId("SSH|$cleanHost|$port|$cleanUser|$cleanPayload")
+    return VpnServer(
+      id = id,
+      name = displayName,
+      protocol = VpnProtocol.SSH,
+      address = cleanHost,
+      port = port,
+      network = "ssh",
+      tlsMode = if (cleanPayload.isNotEmpty()) "payload" else "none",
+      username = cleanUser,
+      password = password,
+      payload = cleanPayload,
+      isCustom = isCustom,
+    )
+  }
+
+  private fun parseSsh(uri: String, isCustom: Boolean): VpnServer? {
+    val body = uri.substring("ssh://".length)
+    val fragmentSplit = body.split("#", limit = 2)
+    val beforeFragment = fragmentSplit[0]
+    val rawRemark = if (fragmentSplit.size > 1) urlDecode(fragmentSplit[1]) else ""
+
+    val querySplit = beforeFragment.split("?", limit = 2)
+    val authority = querySplit[0]
+    val queryStr = if (querySplit.size > 1) querySplit[1] else ""
+    val params = parseQueryParams(queryStr)
+
+    val atIndex = authority.lastIndexOf('@')
+    if (atIndex <= 0) return null
+    val credentials = authority.substring(0, atIndex)
+    val hostPort = authority.substring(atIndex + 1).trim()
+    val colonIdx = credentials.indexOf(':')
+    val username =
+      if (colonIdx >= 0) urlDecode(credentials.substring(0, colonIdx)).trim()
+      else urlDecode(credentials).trim()
+    val password =
+      if (colonIdx >= 0) urlDecode(credentials.substring(colonIdx + 1)) else ""
+
+    val (host, port) =
+      parseHostPort(hostPort)
+        ?: run {
+          if (hostPort.isNotBlank() && !hostPort.contains(":")) hostPort to 22 else return null
+        }
+    if (username.isEmpty() || host.isEmpty() || port <= 0) return null
+
+    val payload = params["payload"].orEmpty()
+    val server =
+      createSshServer(
+        name = rawRemark,
+        host = host,
+        port = port,
+        username = username,
+        password = password,
+        payload = payload,
+        isCustom = isCustom,
+      )
+    return server.copy(rawUri = uri)
   }
 
   private fun parseVless(uri: String, isCustom: Boolean): VpnServer? {
@@ -441,6 +549,9 @@ object VpnLinkParser {
           put("serviceName", s.serviceName)
           put("mode", s.mode)
           put("allowInsecure", s.allowInsecure)
+          put("username", s.username)
+          put("password", s.password)
+          put("payload", s.payload)
           put("rawUri", s.rawUri)
           put("isCustom", s.isCustom)
           if (s.latencyMs != null) put("latencyMs", s.latencyMs)
@@ -467,7 +578,7 @@ object VpnLinkParser {
                 protocol = protocol,
                 address = o.optString("address"),
                 port = o.optInt("port"),
-                uuid = o.optString("uuid"),
+                uuid = o.optString("uuid", ""),
                 alterId = o.optInt("alterId", 0),
                 security = o.optString("security", "auto"),
                 network = o.optString("network", "tcp"),
@@ -486,6 +597,9 @@ object VpnLinkParser {
                 serviceName = o.optString("serviceName", ""),
                 mode = o.optString("mode", ""),
                 allowInsecure = o.optBoolean("allowInsecure", false),
+                username = o.optString("username", ""),
+                password = o.optString("password", ""),
+                payload = o.optString("payload", ""),
                 rawUri = o.optString("rawUri", ""),
                 isCustom = o.optBoolean("isCustom", false),
                 latencyMs = if (o.has("latencyMs")) o.optLong("latencyMs") else null,

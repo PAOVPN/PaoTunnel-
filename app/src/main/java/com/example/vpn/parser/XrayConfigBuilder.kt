@@ -7,7 +7,11 @@ import org.json.JSONObject
 
 object XrayConfigBuilder {
 
-  fun buildConfig(server: VpnServer, enableTunInbound: Boolean = true): String {
+  fun buildConfig(
+    server: VpnServer,
+    enableTunInbound: Boolean = true,
+    sshLocalSocksPort: Int = 10808,
+  ): String {
     val root = JSONObject()
 
     root.put("log", JSONObject().put("loglevel", "warning"))
@@ -37,6 +41,7 @@ object XrayConfigBuilder {
       },
     )
 
+    val isSsh = server.protocol == VpnProtocol.SSH
     val mappedDomain = resolvePlainVlessMappedDomain(server)
     root.put(
       "dns",
@@ -44,7 +49,12 @@ object XrayConfigBuilder {
         if (mappedDomain != null) {
           put("hosts", JSONObject().put(mappedDomain, server.address.trim()))
         }
-        put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8").put("localhost"))
+        if (isSsh) {
+          // SSH direct-tcpip tunnels TCP only, so force DNS resolution over TCP through SOCKS5
+          put("servers", JSONArray().put("tcp://1.1.1.1").put("tcp://8.8.8.8"))
+        } else {
+          put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8").put("localhost"))
+        }
         put("queryStrategy", "UseIPv4")
       },
     )
@@ -74,26 +84,36 @@ object XrayConfigBuilder {
         }
       )
     }
-    inbounds.put(
-      JSONObject().apply {
-        put("tag", "socks-in")
-        put("listen", "127.0.0.1")
-        put("port", 10808)
-        put("protocol", "socks")
-        put(
-          "settings",
-          JSONObject().apply {
-            put("auth", "noauth")
-            put("udp", true)
-            put("userLevel", 8)
-          },
-        )
-      }
-    )
+    if (!isSsh) {
+      inbounds.put(
+        JSONObject().apply {
+          put("tag", "socks-in")
+          put("listen", "127.0.0.1")
+          put("port", 10808)
+          put("protocol", "socks")
+          put(
+            "settings",
+            JSONObject().apply {
+              put("auth", "noauth")
+              put("udp", true)
+              put("userLevel", 8)
+            },
+          )
+        }
+      )
+    }
     root.put("inbounds", inbounds)
 
     val outbounds = JSONArray()
-    outbounds.put(buildProxyOutbound(server))
+    outbounds.put(buildProxyOutbound(server, sshLocalSocksPort))
+    if (isSsh) {
+      outbounds.put(
+        JSONObject().apply {
+          put("tag", "dns-out")
+          put("protocol", "dns")
+        }
+      )
+    }
     outbounds.put(
       JSONObject().apply {
         put("tag", "direct")
@@ -116,6 +136,16 @@ object XrayConfigBuilder {
         put(
           "rules",
           JSONArray().apply {
+            if (isSsh) {
+              put(
+                JSONObject().apply {
+                  put("type", "field")
+                  put("inboundTag", JSONArray().put("tun-in"))
+                  put("port", 53)
+                  put("outboundTag", "dns-out")
+                }
+              )
+            }
             put(
               JSONObject().apply {
                 put("type", "field")
@@ -202,7 +232,7 @@ object XrayConfigBuilder {
     return resolvePlainVlessMappedDomain(server) ?: server.address.trim()
   }
 
-  private fun buildProxyOutbound(server: VpnServer): JSONObject {
+  private fun buildProxyOutbound(server: VpnServer, sshLocalSocksPort: Int): JSONObject {
     val outbound = JSONObject()
     outbound.put("tag", "proxy")
 
@@ -223,6 +253,8 @@ object XrayConfigBuilder {
             put("users", JSONArray().put(user))
           }
         outbound.put("settings", JSONObject().put("vnext", JSONArray().put(vnext)))
+        outbound.put("streamSettings", buildStreamSettings(server))
+        outbound.put("mux", JSONObject().put("enabled", false))
       }
       VpnProtocol.VMESS -> {
         outbound.put("protocol", "vmess")
@@ -240,11 +272,20 @@ object XrayConfigBuilder {
             put("users", JSONArray().put(user))
           }
         outbound.put("settings", JSONObject().put("vnext", JSONArray().put(vnext)))
+        outbound.put("streamSettings", buildStreamSettings(server))
+        outbound.put("mux", JSONObject().put("enabled", false))
+      }
+      VpnProtocol.SSH -> {
+        outbound.put("protocol", "socks")
+        val socksServer =
+          JSONObject().apply {
+            put("address", "127.0.0.1")
+            put("port", sshLocalSocksPort)
+          }
+        outbound.put("settings", JSONObject().put("servers", JSONArray().put(socksServer)))
       }
     }
 
-    outbound.put("streamSettings", buildStreamSettings(server))
-    outbound.put("mux", JSONObject().put("enabled", false))
     return outbound
   }
 

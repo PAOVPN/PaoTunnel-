@@ -1,0 +1,426 @@
+package com.example.ui
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.R
+import com.example.ui.theme.AmberConnecting
+import com.example.ui.theme.CyanPulse
+import com.example.ui.theme.DeepNavySurface
+import com.example.ui.theme.ElevatedSlateCard
+import com.example.ui.theme.EmeraldShield
+import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.ObsidianBg
+import com.example.ui.theme.SlateOutline
+import com.example.ui.theme.TextMuted
+import com.example.ui.theme.TextPrimary
+import com.example.ui.theme.TextSecondary
+
+private enum class AddServerTab {
+  V2RAY_LINK,
+  SSH_FORM,
+}
+
+@Composable
+fun AddServerDialog(
+  onDismiss: () -> Unit,
+  onImportLink: (String) -> Unit,
+  onAddSshServer: (
+    name: String,
+    host: String,
+    port: Int,
+    username: String,
+    password: String,
+    payload: String,
+  ) -> Unit,
+) {
+  var activeTab by remember { mutableStateOf(AddServerTab.V2RAY_LINK) }
+  var linkInput by remember { mutableStateOf("") }
+
+  var sshName by remember { mutableStateOf("") }
+  var sshHost by remember { mutableStateOf("") }
+  var sshPortText by remember { mutableStateOf("22") }
+  var sshUsername by remember { mutableStateOf("") }
+  var sshPassword by remember { mutableStateOf("") }
+  var passwordVisible by remember { mutableStateOf(false) }
+  var sshPayload by remember { mutableStateOf("") }
+
+  val parsedSshPort = sshPortText.trim().toIntOrNull()
+  val isSshValid =
+    sshHost.isNotBlank() && parsedSshPort != null && parsedSshPort in 1..65535 && sshUsername.isNotBlank()
+
+  val fieldColors =
+    OutlinedTextFieldDefaults.colors(
+      focusedBorderColor = CyanPulse,
+      unfocusedBorderColor = SlateOutline,
+      focusedTextColor = TextPrimary,
+      unfocusedTextColor = TextPrimary,
+      focusedLabelColor = CyanPulse,
+      unfocusedLabelColor = TextSecondary,
+      cursorColor = CyanPulse,
+    )
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = ElevatedSlateCard,
+    titleContentColor = TextPrimary,
+    textContentColor = TextSecondary,
+    title = {
+      Text(
+        text = stringResource(R.string.import_link),
+        style = MaterialTheme.typography.titleLarge,
+      )
+    },
+    text = {
+      Column(modifier = Modifier.fillMaxWidth()) {
+        // Protocol switcher
+        Row(
+          modifier =
+            Modifier.fillMaxWidth()
+              .clip(RoundedCornerShape(14.dp))
+              .background(DeepNavySurface)
+              .border(1.dp, SlateOutline, RoundedCornerShape(14.dp))
+              .padding(4.dp),
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          ProtocolTabButton(
+            label = "V2Ray Link",
+            selected = activeTab == AddServerTab.V2RAY_LINK,
+            accentColor = CyanPulse,
+            onClick = { activeTab = AddServerTab.V2RAY_LINK },
+            modifier = Modifier.weight(1f).testTag("protocol_tab_v2ray"),
+          )
+          ProtocolTabButton(
+            label = "SSH Tunnel",
+            selected = activeTab == AddServerTab.SSH_FORM,
+            accentColor = AmberConnecting,
+            onClick = { activeTab = AddServerTab.SSH_FORM },
+            modifier = Modifier.weight(1f).testTag("protocol_tab_ssh"),
+          )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        if (activeTab == AddServerTab.V2RAY_LINK) {
+          Text(
+            text = "Paste a vless://, vmess://, or ssh:// share link to add it to your server dropdown.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary,
+          )
+          Spacer(modifier = Modifier.height(12.dp))
+          OutlinedTextField(
+            value = linkInput,
+            onValueChange = { linkInput = it },
+            placeholder = {
+              Text(
+                text = "vless://... or vmess://... or ssh://...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted,
+              )
+            },
+            minLines = 3,
+            maxLines = 5,
+            colors = fieldColors,
+            modifier = Modifier.fillMaxWidth().testTag("import_link_input"),
+          )
+        } else {
+          Column(
+            modifier =
+              Modifier.fillMaxWidth()
+                .heightIn(max = 410.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            OutlinedTextField(
+              value = sshName,
+              onValueChange = { sshName = it },
+              label = { Text("Server Name (Optional)") },
+              placeholder = { Text("SG SSH Node", color = TextMuted) },
+              singleLine = true,
+              colors = fieldColors,
+              modifier = Modifier.fillMaxWidth().testTag("ssh_name_input"),
+            )
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              OutlinedTextField(
+                value = sshHost,
+                onValueChange = { sshHost = it },
+                label = { Text("Host / IP") },
+                placeholder = { Text("157.85.103.29", color = TextMuted) },
+                singleLine = true,
+                colors = fieldColors,
+                modifier = Modifier.weight(0.65f).testTag("ssh_host_input"),
+              )
+              OutlinedTextField(
+                value = sshPortText,
+                onValueChange = { input ->
+                  sshPortText = input.filter { it.isDigit() }.take(5)
+                },
+                label = { Text("Port") },
+                placeholder = { Text("22", color = TextMuted) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                colors = fieldColors,
+                modifier = Modifier.weight(0.35f).testTag("ssh_port_input"),
+              )
+            }
+
+            // Quick port chips
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = "Quick Port:",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+              )
+              listOf("22", "443", "80").forEach { preset ->
+                val selected = sshPortText.trim() == preset
+                MiniChip(
+                  text = preset,
+                  highlighted = selected,
+                  onClick = { sshPortText = preset },
+                )
+              }
+            }
+
+            OutlinedTextField(
+              value = sshUsername,
+              onValueChange = { sshUsername = it },
+              label = { Text("Username") },
+              placeholder = { Text("root", color = TextMuted) },
+              singleLine = true,
+              colors = fieldColors,
+              modifier = Modifier.fillMaxWidth().testTag("ssh_username_input"),
+            )
+
+            OutlinedTextField(
+              value = sshPassword,
+              onValueChange = { sshPassword = it },
+              label = { Text("Password") },
+              singleLine = true,
+              visualTransformation =
+                if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+              trailingIcon = {
+                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                  Icon(
+                    imageVector =
+                      if (passwordVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                    contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                    tint = TextSecondary,
+                    modifier = Modifier.size(20.dp),
+                  )
+                }
+              },
+              colors = fieldColors,
+              modifier = Modifier.fillMaxWidth().testTag("ssh_password_input"),
+            )
+
+            OutlinedTextField(
+              value = sshPayload,
+              onValueChange = { sshPayload = it },
+              label = { Text("Payload (Custom HTTP Header)") },
+              placeholder = {
+                Text(
+                  text = "GET / HTTP/1.1[crlf]Host: bug.example.com[crlf]Upgrade: websocket[crlf][crlf]",
+                  style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFamily, fontSize = 12.sp),
+                  color = TextMuted,
+                )
+              },
+              textStyle =
+                MaterialTheme.typography.bodyMedium.copy(
+                  fontFamily = JetBrainsMonoFamily,
+                  fontSize = 12.sp,
+                ),
+              minLines = 3,
+              maxLines = 5,
+              colors = fieldColors,
+              modifier = Modifier.fillMaxWidth().testTag("ssh_payload_input"),
+            )
+
+            Row(
+              modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              MiniChip(
+                text = "[host_port]",
+                highlighted = false,
+                onClick = { sshPayload += "[host_port]" },
+              )
+              MiniChip(
+                text = "[crlf]",
+                highlighted = false,
+                onClick = { sshPayload += "[crlf]" },
+              )
+              MiniChip(
+                text = "[split]",
+                highlighted = false,
+                onClick = { sshPayload += "[split]" },
+              )
+              MiniChip(
+                text = "WS Sample",
+                highlighted = false,
+                onClick = {
+                  val hostToken = sshHost.trim().ifBlank { "[host]" }
+                  sshPayload =
+                    "GET / HTTP/1.1[crlf]Host: $hostToken[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]"
+                },
+              )
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      if (activeTab == AddServerTab.V2RAY_LINK) {
+        Button(
+          onClick = { onImportLink(linkInput) },
+          enabled = linkInput.isNotBlank(),
+          colors = ButtonDefaults.buttonColors(containerColor = EmeraldShield, contentColor = ObsidianBg),
+          modifier = Modifier.testTag("import_link_confirm_button"),
+        ) {
+          Text("Import", style = MaterialTheme.typography.labelLarge)
+        }
+      } else {
+        Button(
+          onClick = {
+            onAddSshServer(
+              sshName,
+              sshHost,
+              parsedSshPort ?: 22,
+              sshUsername,
+              sshPassword,
+              sshPayload,
+            )
+          },
+          enabled = isSshValid,
+          colors = ButtonDefaults.buttonColors(containerColor = AmberConnecting, contentColor = ObsidianBg),
+          modifier = Modifier.testTag("ssh_save_button"),
+        ) {
+          Text("Save SSH", style = MaterialTheme.typography.labelLarge)
+        }
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Cancel", color = TextSecondary)
+      }
+    },
+  )
+}
+
+@Composable
+private fun ProtocolTabButton(
+  label: String,
+  selected: Boolean,
+  accentColor: androidx.compose.ui.graphics.Color,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Box(
+    modifier =
+      modifier
+        .heightIn(min = 42.dp)
+        .clip(RoundedCornerShape(10.dp))
+        .background(if (selected) accentColor.copy(alpha = 0.18f) else DeepNavySurface)
+        .border(
+          width = if (selected) 1.dp else 0.dp,
+          color = if (selected) accentColor.copy(alpha = 0.5f) else DeepNavySurface,
+          shape = RoundedCornerShape(10.dp),
+        )
+        .clickable(onClick = onClick)
+        .padding(horizontal = 10.dp, vertical = 10.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Text(
+      text = label,
+      style =
+        MaterialTheme.typography.labelLarge.copy(
+          fontSize = 13.sp,
+          fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+        ),
+      color = if (selected) accentColor else TextSecondary,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
+}
+
+@Composable
+private fun MiniChip(
+  text: String,
+  highlighted: Boolean,
+  onClick: () -> Unit,
+) {
+  Surface(
+    shape = RoundedCornerShape(8.dp),
+    color = if (highlighted) AmberConnecting.copy(alpha = 0.18f) else DeepNavySurface,
+    border =
+      BorderStroke(
+        1.dp,
+        if (highlighted) AmberConnecting.copy(alpha = 0.6f) else SlateOutline,
+      ),
+    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick),
+  ) {
+    Text(
+      text = text,
+      style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),
+      color = if (highlighted) AmberConnecting else TextSecondary,
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+    )
+  }
+}

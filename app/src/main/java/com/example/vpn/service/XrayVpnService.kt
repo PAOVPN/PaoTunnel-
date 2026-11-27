@@ -17,9 +17,11 @@ import com.example.MainActivity
 import com.example.R
 import com.example.vpn.core.XrayCoreAdapterImpl
 import com.example.vpn.core.XrayCoreEvents
+import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import com.example.vpn.parser.VpnLinkParser
 import com.example.vpn.parser.XrayConfigBuilder
+import com.example.vpn.ssh.SshTunnelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -101,6 +103,7 @@ class XrayVpnService : VpnService() {
       serviceScope.launch {
         runCatching {
             XrayCoreAdapterImpl.stop()
+            SshTunnelManager.stop()
             runCatching { vpnInterface?.close() }
             vpnInterface = null
 
@@ -117,6 +120,12 @@ class XrayVpnService : VpnService() {
               Os.setenv("XRAY_VLESS_ALLOWINSECURE", "true", true)
             }
             XrayCoreAdapterImpl.initCoreEnv(filesDir.absolutePath)
+
+            val isSsh = server.protocol == VpnProtocol.SSH
+            if (isSsh) {
+              SshTunnelManager.start(server, SshTunnelManager.DEFAULT_LOCAL_SOCKS_PORT)
+                .getOrThrow()
+            }
 
             val tunPfd =
               Builder()
@@ -136,7 +145,12 @@ class XrayVpnService : VpnService() {
                 ?: error("Failed to establish Android VPN interface.")
 
             vpnInterface = tunPfd
-            val configJson = XrayConfigBuilder.buildConfig(server, enableTunInbound = true)
+            val configJson =
+              XrayConfigBuilder.buildConfig(
+                server = server,
+                enableTunInbound = true,
+                sshLocalSocksPort = SshTunnelManager.DEFAULT_LOCAL_SOCKS_PORT,
+              )
 
             val result =
               XrayCoreAdapterImpl.start(
@@ -151,7 +165,7 @@ class XrayVpnService : VpnService() {
                         connectedAtElapsedMs = SystemClock.elapsedRealtime(),
                       )
                       startForegroundNotification(server.name, connecting = false)
-                      startTrafficPolling()
+                      startTrafficPolling(isSsh)
                     }
 
                     override fun onCoreStopped() {
@@ -175,28 +189,37 @@ class XrayVpnService : VpnService() {
                 connectedAtElapsedMs = SystemClock.elapsedRealtime(),
               )
               startForegroundNotification(server.name, connecting = false)
-              startTrafficPolling()
+              startTrafficPolling(isSsh)
             }
           }
           .onFailure { error ->
             runCatching { vpnInterface?.close() }
             vpnInterface = null
             XrayCoreAdapterImpl.stop()
-            VpnStateHolder.setDisconnected(error.message ?: "Failed to start Xray VPN.")
+            SshTunnelManager.stop()
+            VpnStateHolder.setDisconnected(error.message ?: "Failed to start VPN tunnel.")
             stopForegroundCompat()
             stopSelf()
           }
       }
   }
 
-  private fun startTrafficPolling() {
+  private fun startTrafficPolling(isSsh: Boolean) {
     statsJob?.cancel()
     statsJob =
       serviceScope.launch {
-        while (isActive && XrayCoreAdapterImpl.isRunning) {
-          val (up, down) = XrayCoreAdapterImpl.queryTrafficDelta()
+        while (isActive && XrayCoreAdapterImpl.isRunning && (!isSsh || SshTunnelManager.isRunning)) {
+          val (up, down) =
+            if (isSsh) {
+              SshTunnelManager.queryTrafficDelta()
+            } else {
+              XrayCoreAdapterImpl.queryTrafficDelta()
+            }
           VpnStateHolder.updateTrafficStats(up, down)
           delay(1000L)
+        }
+        if (isActive && isSsh && !SshTunnelManager.isRunning) {
+          disconnectAndStop()
         }
       }
   }
@@ -207,6 +230,7 @@ class XrayVpnService : VpnService() {
     coreJob?.cancel()
     serviceScope.launch {
       XrayCoreAdapterImpl.stop()
+      SshTunnelManager.stop()
       runCatching { vpnInterface?.close() }
       vpnInterface = null
       VpnStateHolder.setDisconnected(null)
@@ -224,6 +248,7 @@ class XrayVpnService : VpnService() {
     statsJob?.cancel()
     coreJob?.cancel()
     XrayCoreAdapterImpl.stop()
+    SshTunnelManager.stop()
     runCatching { vpnInterface?.close() }
     vpnInterface = null
     serviceScope.cancel()

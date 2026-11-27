@@ -150,4 +150,52 @@ class ExampleRobolectricTest {
         .getJSONObject(0)
     assertEquals("157.85.103.29", vnext443.getString("address"))
   }
+
+  @Test
+  fun `create ssh server parse ssh uri and build tun2socks socks5 xray config`() {
+    val sshServer =
+      VpnLinkParser.createSshServer(
+        name = "SG SSH 443",
+        host = "157.85.103.29",
+        port = 443,
+        username = "pao_user",
+        password = "secret_pw",
+        payload = "GET / HTTP/1.1[crlf]Host: bug.example.com[crlf]Upgrade: websocket[crlf][crlf]",
+      )
+
+    assertEquals(VpnProtocol.SSH, sshServer.protocol)
+    assertEquals("pao_user · PAYLOAD", sshServer.transportSummary)
+
+    val roundTripped = VpnLinkParser.fromStorageJson(VpnLinkParser.toStorageJson(listOf(sshServer))).first()
+    assertEquals("pao_user", roundTripped.username)
+    assertEquals("secret_pw", roundTripped.password)
+    assertTrue(roundTripped.payload.contains("Upgrade: websocket"))
+
+    val parsedUri = VpnLinkParser.parseUri("ssh://alice:pass123@ssh.example.com:22#My%20SSH")!!
+    assertEquals(VpnProtocol.SSH, parsedUri.protocol)
+    assertEquals("My SSH", parsedUri.name)
+    assertEquals("alice", parsedUri.username)
+    assertEquals("pass123", parsedUri.password)
+    assertEquals(22, parsedUri.port)
+
+    val config = JSONObject(XrayConfigBuilder.buildConfig(sshServer, enableTunInbound = true, sshLocalSocksPort = 10808))
+    val inbounds = config.getJSONArray("inbounds")
+    assertEquals(1, inbounds.length())
+    assertEquals("tun", inbounds.getJSONObject(0).getString("protocol"))
+
+    val proxyOutbound = config.getJSONArray("outbounds").getJSONObject(0)
+    assertEquals("proxy", proxyOutbound.getString("tag"))
+    assertEquals("socks", proxyOutbound.getString("protocol"))
+    val socksTarget = proxyOutbound.getJSONObject("settings").getJSONArray("servers").getJSONObject(0)
+    assertEquals("127.0.0.1", socksTarget.getString("address"))
+    assertEquals(10808, socksTarget.getInt("port"))
+
+    val formattedPayload =
+      com.example.vpn.ssh.SshPayloadHelper.formatPayload(
+        "CONNECT [host_port] [protocol][crlf]Host: [host][crlf][crlf]",
+        "157.85.103.29",
+        443,
+      )
+    assertEquals("CONNECT 157.85.103.29:443 HTTP/1.1\r\nHost: 157.85.103.29\r\n\r\n", formattedPayload)
+  }
 }

@@ -150,7 +150,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         .onFailure { error ->
           transientState.update {
-            it.copy(statusBannerMessage = error.message ?: "Invalid VLESS or VMess link.")
+            it.copy(statusBannerMessage = error.message ?: "Invalid VLESS, VMess, or SSH link.")
+          }
+        }
+    }
+  }
+
+  fun addSshServer(
+    name: String,
+    host: String,
+    port: Int,
+    username: String,
+    password: String,
+    payload: String,
+  ) {
+    viewModelScope.launch {
+      repository
+        .addSshServer(
+          name = name,
+          host = host,
+          port = port,
+          username = username,
+          password = password,
+          payload = payload,
+        )
+        .onSuccess { server ->
+          transientState.update {
+            it.copy(
+              showImportDialog = false,
+              statusBannerMessage = "Added SSH Server: ${server.name}",
+            )
+          }
+        }
+        .onFailure { error ->
+          transientState.update {
+            it.copy(statusBannerMessage = error.message ?: "Invalid SSH server settings.")
           }
         }
     }

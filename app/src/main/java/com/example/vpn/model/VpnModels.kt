@@ -5,6 +5,7 @@ import androidx.compose.runtime.Immutable
 enum class VpnProtocol(val displayName: String) {
   VLESS("VLESS"),
   VMESS("VMess"),
+  SSH("SSH"),
 }
 
 enum class VpnConnectionState {
@@ -22,7 +23,7 @@ data class VpnServer(
   val protocol: VpnProtocol,
   val address: String,
   val port: Int,
-  val uuid: String,
+  val uuid: String = "",
   val alterId: Int = 0,
   val security: String = "auto",
   val network: String = "tcp",
@@ -41,12 +42,20 @@ data class VpnServer(
   val serviceName: String = "",
   val mode: String = "",
   val allowInsecure: Boolean = false,
+  val username: String = "",
+  val password: String = "",
+  val payload: String = "",
   val rawUri: String = "",
   val isCustom: Boolean = false,
   val latencyMs: Long? = null,
 ) {
   val transportSummary: String
     get() {
+      if (protocol == VpnProtocol.SSH) {
+        val modeLabel = if (payload.isNotBlank()) "PAYLOAD" else "DIRECT"
+        val userPrefix = if (username.isNotBlank()) "$username · " else ""
+        return "${userPrefix}$modeLabel"
+      }
       val netLabel = network.uppercase()
       val secLabel =
         when (tlsMode.lowercase()) {

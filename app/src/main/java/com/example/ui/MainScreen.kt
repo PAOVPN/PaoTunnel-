@@ -62,8 +62,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -129,6 +127,14 @@ fun MainScreen(
   onOpenImportDialog: () -> Unit,
   onCloseImportDialog: () -> Unit,
   onImportLink: (String) -> Unit,
+  onAddSshServer: (
+    name: String,
+    host: String,
+    port: Int,
+    username: String,
+    password: String,
+    payload: String,
+  ) -> Unit,
   onDeleteCustomServer: (String) -> Unit,
   onDismissMessage: () -> Unit,
 ) {
@@ -284,7 +290,11 @@ fun MainScreen(
   }
 
   if (uiState.showImportDialog) {
-    ImportServerLinkDialog(onDismiss = onCloseImportDialog, onImport = onImportLink)
+    AddServerDialog(
+      onDismiss = onCloseImportDialog,
+      onImportLink = onImportLink,
+      onAddSshServer = onAddSshServer,
+    )
   }
 }
 
@@ -332,7 +342,7 @@ private fun TopHeaderBar(
           color = TextPrimary,
         )
         Text(
-          text = if (coreAvailable) "Xray Core Ready" else "Xray Preview Mode",
+          text = if (coreAvailable) "Xray & SSH Ready" else "SSH Ready · Xray Preview",
           style = MaterialTheme.typography.labelSmall,
           color = if (coreAvailable) EmeraldShield else TextMuted,
         )
@@ -610,13 +620,13 @@ private fun ServerSelectorDropdown(
 
 @Composable
 private fun ProtocolBadge(protocol: VpnProtocol) {
-  val bg =
-    if (protocol == VpnProtocol.VLESS) {
-      CyanPulse.copy(alpha = 0.16f)
-    } else {
-      EmeraldShield.copy(alpha = 0.16f)
+  val fg =
+    when (protocol) {
+      VpnProtocol.VLESS -> CyanPulse
+      VpnProtocol.VMESS -> EmeraldShield
+      VpnProtocol.SSH -> AmberConnecting
     }
-  val fg = if (protocol == VpnProtocol.VLESS) CyanPulse else EmeraldShield
+  val bg = fg.copy(alpha = 0.16f)
   Box(
     modifier =
       Modifier.clip(RoundedCornerShape(8.dp))
@@ -992,74 +1002,6 @@ private fun ErrorInfoBanner(
       )
     }
   }
-}
-
-@Composable
-private fun ImportServerLinkDialog(
-  onDismiss: () -> Unit,
-  onImport: (String) -> Unit,
-) {
-  var linkInput by remember { mutableStateOf("") }
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    containerColor = ElevatedSlateCard,
-    titleContentColor = TextPrimary,
-    textContentColor = TextSecondary,
-    title = {
-      Text(
-        text = stringResource(R.string.import_link),
-        style = MaterialTheme.typography.titleLarge,
-      )
-    },
-    text = {
-      Column {
-        Text(
-          text = "Paste a vless:// or vmess:// share link to add it to your server dropdown.",
-          style = MaterialTheme.typography.bodyMedium,
-          color = TextSecondary,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedTextField(
-          value = linkInput,
-          onValueChange = { linkInput = it },
-          placeholder = {
-            Text(
-              text = "vless://... or vmess://...",
-              style = MaterialTheme.typography.bodyMedium,
-              color = TextMuted,
-            )
-          },
-          minLines = 3,
-          maxLines = 5,
-          colors =
-            OutlinedTextFieldDefaults.colors(
-              focusedBorderColor = CyanPulse,
-              unfocusedBorderColor = SlateOutline,
-              focusedTextColor = TextPrimary,
-              unfocusedTextColor = TextPrimary,
-              cursorColor = CyanPulse,
-            ),
-          modifier = Modifier.fillMaxWidth().testTag("import_link_input"),
-        )
-      }
-    },
-    confirmButton = {
-      Button(
-        onClick = { onImport(linkInput) },
-        enabled = linkInput.isNotBlank(),
-        colors = ButtonDefaults.buttonColors(containerColor = EmeraldShield, contentColor = ObsidianBg),
-        modifier = Modifier.testTag("import_link_confirm_button"),
-      ) {
-        Text("Import", style = MaterialTheme.typography.labelLarge)
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text("Cancel", color = TextSecondary)
-      }
-    },
-  )
 }
 
 private fun formatDuration(totalSeconds: Long): String {

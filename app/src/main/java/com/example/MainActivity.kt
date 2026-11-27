@@ -77,6 +77,9 @@ class MainActivity : ComponentActivity() {
           onOpenImportDialog = { viewModel.openImportDialog() },
           onCloseImportDialog = { viewModel.closeImportDialog() },
           onImportLink = { link -> viewModel.importCustomServer(link) },
+          onAddSshServer = { name, host, port, username, password, payload ->
+            viewModel.addSshServer(name, host, port, username, password, payload)
+          },
           onDeleteCustomServer = { id -> viewModel.deleteCustomServer(id) },
           onDismissMessage = { viewModel.dismissBannerMessage() },
         )

@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.vpn.core.XrayCoreAdapterImpl
+import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import com.example.vpn.parser.VpnLinkParser
 import com.example.vpn.parser.XrayConfigBuilder
@@ -114,16 +115,51 @@ class ServerRepository(private val context: Context) {
       runCatching {
         val parsed =
           VpnLinkParser.parseUri(uri, isCustom = true)
-            ?: error("Invalid link. Please paste a valid vless:// or vmess:// link.")
-        context.vpnDataStore.edit { prefs ->
-          val existing = VpnLinkParser.fromStorageJson(prefs[KEY_CUSTOM_SERVERS].orEmpty())
-          val updated = (listOf(parsed) + existing.filterNot { it.id == parsed.id })
-          prefs[KEY_CUSTOM_SERVERS] = VpnLinkParser.toStorageJson(updated)
-          prefs[KEY_SELECTED_SERVER_ID] = parsed.id
-        }
+            ?: error("Invalid link. Please paste a valid vless://, vmess://, or ssh:// link.")
+        saveCustomServer(parsed)
         parsed
       }
     }
+
+  suspend fun addSshServer(
+    name: String,
+    host: String,
+    port: Int,
+    username: String,
+    password: String,
+    payload: String,
+  ): Result<VpnServer> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        val cleanHost = host.trim()
+        val cleanUser = username.trim()
+        require(cleanHost.isNotEmpty()) { "Host / IP is required." }
+        require(port in 1..65535) { "Port must be between 1 and 65535." }
+        require(cleanUser.isNotEmpty()) { "Username is required." }
+
+        val server =
+          VpnLinkParser.createSshServer(
+            name = name,
+            host = cleanHost,
+            port = port,
+            username = cleanUser,
+            password = password,
+            payload = payload,
+            isCustom = true,
+          )
+        saveCustomServer(server)
+        server
+      }
+    }
+
+  private suspend fun saveCustomServer(server: VpnServer) {
+    context.vpnDataStore.edit { prefs ->
+      val existing = VpnLinkParser.fromStorageJson(prefs[KEY_CUSTOM_SERVERS].orEmpty())
+      val updated = listOf(server) + existing.filterNot { it.id == server.id }
+      prefs[KEY_CUSTOM_SERVERS] = VpnLinkParser.toStorageJson(updated)
+      prefs[KEY_SELECTED_SERVER_ID] = server.id
+    }
+  }
 
   suspend fun deleteCustomServer(serverId: String) {
     context.vpnDataStore.edit { prefs ->
@@ -167,7 +203,7 @@ class ServerRepository(private val context: Context) {
         val delay = XrayCoreAdapterImpl.measureDelay()
         if (delay != null) return@withContext delay
       }
-      if (XrayCoreAdapterImpl.isCoreAvailable) {
+      if (server.protocol != VpnProtocol.SSH && XrayCoreAdapterImpl.isCoreAvailable) {
         val config = XrayConfigBuilder.buildConfig(server, enableTunInbound = false)
         val outboundDelay = XrayCoreAdapterImpl.measureOutboundDelay(config)
         if (outboundDelay != null) return@withContext outboundDelay
