@@ -11,6 +11,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.system.Os
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
@@ -109,6 +110,10 @@ class XrayVpnService : VpnService() {
               )
             }
 
+            runCatching {
+              Os.setenv("xray.vless.allowInsecure", "true", true)
+              Os.setenv("XRAY_VLESS_ALLOWINSECURE", "true", true)
+            }
             XrayCoreAdapterImpl.initCoreEnv(filesDir.absolutePath)
 
             val tunPfd =

@@ -1,5 +1,6 @@
 package com.example.vpn.core
 
+import android.system.Os
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.Libv2ray
@@ -14,8 +15,16 @@ object XrayCoreAdapterImpl : XrayCoreAdapter {
   override val isRunning: Boolean
     get() = controller?.isRunning == true
 
+  private fun ensureXrayVlessEnv() {
+    runCatching {
+      Os.setenv("xray.vless.allowInsecure", "true", true)
+      Os.setenv("XRAY_VLESS_ALLOWINSECURE", "true", true)
+    }
+  }
+
   @Synchronized
   override fun initCoreEnv(assetDirPath: String) {
+    ensureXrayVlessEnv()
     if (!envInitialized) {
       Libv2ray.initCoreEnv(assetDirPath, "")
       envInitialized = true
@@ -25,6 +34,7 @@ object XrayCoreAdapterImpl : XrayCoreAdapter {
   @Synchronized
   override fun start(configJson: String, tunFd: Int, events: XrayCoreEvents): Result<Unit> {
     return runCatching {
+      ensureXrayVlessEnv()
       val callback =
         object : CoreCallbackHandler {
           override fun startup(): Long {
@@ -69,6 +79,7 @@ object XrayCoreAdapterImpl : XrayCoreAdapter {
   }
 
   override fun measureOutboundDelay(configJson: String, testUrl: String): Long? {
+    ensureXrayVlessEnv()
     return runCatching { Libv2ray.measureOutboundDelay(configJson, testUrl) }
       .getOrNull()
       ?.takeIf { it > 0L }

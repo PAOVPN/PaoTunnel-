@@ -9,6 +9,7 @@ import com.example.vpn.parser.XrayConfigBuilder
 import java.nio.charset.StandardCharsets
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -88,5 +89,58 @@ class ExampleRobolectricTest {
     assertEquals("US Direct", parsed[1].name)
     assertEquals(VpnProtocol.VLESS, parsed[1].protocol)
     assertTrue(XrayConfigBuilder.buildConfig(parsed[0]).contains("\"protocol\": \"vmess\""))
+  }
+
+  @Test
+  fun `build valid xray configs for port 80 plain vless and port 443 tls vless`() {
+    val port80Uri =
+      "vless://11111111-2222-3333-4444-555555555555@example.com:80?encryption=none&security=none&type=ws&host=example.com&path=%2Fws#Port80"
+    val port443Uri =
+      "vless://11111111-2222-3333-4444-555555555555@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&host=example.com&path=%2Fws#Port443"
+
+    val s80 = VpnLinkParser.parseUri(port80Uri)!!
+    val s443 = VpnLinkParser.parseUri(port443Uri)!!
+
+    val cfg80 = JSONObject(XrayConfigBuilder.buildConfig(s80))
+    val stream80 = cfg80.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+    assertEquals("none", stream80.getString("security"))
+    assertFalse(stream80.has("tlsSettings"))
+
+    val cfg443 = JSONObject(XrayConfigBuilder.buildConfig(s443))
+    val stream443 = cfg443.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+    assertEquals("tls", stream443.getString("security"))
+    assertFalse(stream443.getJSONObject("tlsSettings").has("allowInsecure"))
+  }
+
+  @Test
+  fun `convert ipv4 address to sslip io when vless security is none and keep original ws host`() {
+    val ipPort80Uri =
+      "vless://11111111-2222-3333-4444-555555555555@157.85.103.29:80?encryption=none&security=none&type=ws&host=bug.example.com&path=%2Fws#IP80"
+    val ipPort443Uri =
+      "vless://11111111-2222-3333-4444-555555555555@157.85.103.29:443?encryption=none&security=tls&sni=bug.example.com&type=ws&host=bug.example.com&path=%2Fws#IP443"
+
+    val s80 = VpnLinkParser.parseUri(ipPort80Uri)!!
+    val cfg80 = JSONObject(XrayConfigBuilder.buildConfig(s80))
+    val outbound80 = cfg80.getJSONArray("outbounds").getJSONObject(0)
+    val vnext80 = outbound80.getJSONObject("settings").getJSONArray("vnext").getJSONObject(0)
+    assertEquals("157.85.103.29.sslip.io", vnext80.getString("address"))
+    val wsHost80 =
+      outbound80
+        .getJSONObject("streamSettings")
+        .getJSONObject("wsSettings")
+        .getJSONObject("headers")
+        .getString("Host")
+    assertEquals("bug.example.com", wsHost80)
+
+    val s443 = VpnLinkParser.parseUri(ipPort443Uri)!!
+    val cfg443 = JSONObject(XrayConfigBuilder.buildConfig(s443))
+    val vnext443 =
+      cfg443
+        .getJSONArray("outbounds")
+        .getJSONObject(0)
+        .getJSONObject("settings")
+        .getJSONArray("vnext")
+        .getJSONObject(0)
+    assertEquals("157.85.103.29", vnext443.getString("address"))
   }
 }

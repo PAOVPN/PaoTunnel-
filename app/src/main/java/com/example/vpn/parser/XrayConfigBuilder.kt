@@ -134,6 +134,26 @@ object XrayConfigBuilder {
     return root.toString(2)
   }
 
+  private val ipv4Regex = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$")
+
+  private fun isIpv4Address(address: String): Boolean {
+    val match = ipv4Regex.matchEntire(address.trim()) ?: return false
+    return (1..4).all { index ->
+      val octet = match.groupValues[index].toIntOrNull() ?: return@all false
+      octet in 0..255
+    }
+  }
+
+  private fun resolveVlessOutboundAddress(server: VpnServer): String {
+    val tlsMode = server.tlsMode.lowercase()
+    val isNoTls = tlsMode != "tls" && tlsMode != "reality"
+    return if (isNoTls && isIpv4Address(server.address)) {
+      "${server.address.trim()}.sslip.io"
+    } else {
+      server.address
+    }
+  }
+
   private fun buildProxyOutbound(server: VpnServer): JSONObject {
     val outbound = JSONObject()
     outbound.put("tag", "proxy")
@@ -150,7 +170,7 @@ object XrayConfigBuilder {
           }
         val vnext =
           JSONObject().apply {
-            put("address", server.address)
+            put("address", resolveVlessOutboundAddress(server))
             put("port", server.port)
             put("users", JSONArray().put(user))
           }
@@ -194,7 +214,6 @@ object XrayConfigBuilder {
         "tlsSettings",
         JSONObject().apply {
           put("serverName", sni)
-          put("allowInsecure", server.allowInsecure)
           if (server.fingerprint.isNotBlank()) put("fingerprint", server.fingerprint)
           if (server.alpn.isNotBlank()) {
             val alpnArr = JSONArray()
