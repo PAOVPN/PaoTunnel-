@@ -1,0 +1,6 @@
+{
+  "name": "PAO Tunnel",
+  "description": "Native Android V2Ray/Xray VPN client supporting VLESS and VMess configurations with one-tap server updates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
