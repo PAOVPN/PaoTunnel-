@@ -30,6 +30,7 @@ data class MainUiState(
   val statusBannerMessage: String? = null,
   val showImportDialog: Boolean = false,
   val editingServer: VpnServer? = null,
+  val exportingServer: VpnServer? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -42,6 +43,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val statusBannerMessage: String? = null,
     val showImportDialog: Boolean = false,
     val editingServer: VpnServer? = null,
+    val exportingServer: VpnServer? = null,
   )
 
   private val transientState = MutableStateFlow(TransientUiState())
@@ -65,6 +67,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           statusBannerMessage = transient.statusBannerMessage,
           showImportDialog = transient.showImportDialog,
           editingServer = transient.editingServer,
+          exportingServer = transient.exportingServer,
         )
       }
       .stateIn(
@@ -136,6 +139,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun openEditSshDialog(server: VpnServer) {
+    if (server.isLocked) {
+      transientState.update { it.copy(statusBannerMessage = "Locked configs cannot be edited.") }
+      return
+    }
     transientState.update { it.copy(showImportDialog = true, editingServer = server) }
   }
 
@@ -143,22 +150,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     transientState.update { it.copy(showImportDialog = false, editingServer = null) }
   }
 
+  fun openExportDialog(server: VpnServer) {
+    if (server.isLocked) {
+      transientState.update { it.copy(statusBannerMessage = "Locked configs cannot be shared or exported.") }
+      return
+    }
+    transientState.update { it.copy(exportingServer = server) }
+  }
+
+  fun closeExportDialog() {
+    transientState.update { it.copy(exportingServer = null) }
+  }
+
   fun importCustomServer(rawLink: String) {
     viewModelScope.launch {
       repository
         .addCustomServer(rawLink)
         .onSuccess { server ->
+          val lockTag = if (server.isLocked) " (Locked)" else ""
           transientState.update {
             it.copy(
               showImportDialog = false,
               editingServer = null,
-              statusBannerMessage = "Imported ${server.protocol.displayName}: ${server.name}",
+              statusBannerMessage = "Imported ${server.protocol.displayName}$lockTag: ${server.name}",
             )
           }
         }
         .onFailure { error ->
           transientState.update {
-            it.copy(statusBannerMessage = error.message ?: "Invalid VLESS, VMess, or SSH link.")
+            it.copy(statusBannerMessage = error.message ?: "Invalid VLESS, VMess, SSH, or locked link.")
           }
         }
     }

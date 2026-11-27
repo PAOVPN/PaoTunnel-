@@ -1,6 +1,7 @@
 package com.example.vpn.parser
 
 import android.util.Base64
+import com.example.vpn.crypto.ConfigCrypto
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import java.net.URLDecoder
@@ -126,7 +127,8 @@ object VpnLinkParser {
             candidate != "null" &&
             (candidate.startsWith("vless://", ignoreCase = true) ||
               candidate.startsWith("vmess://", ignoreCase = true) ||
-              candidate.startsWith("ssh://", ignoreCase = true))
+              candidate.startsWith("ssh://", ignoreCase = true) ||
+              candidate.startsWith(ConfigCrypto.LOCKED_SCHEME, ignoreCase = true))
         }
         .orEmpty()
     if (linkCandidate.isNotEmpty()) {
@@ -278,7 +280,8 @@ object VpnLinkParser {
         val cleaned = line.trim()
         if (cleaned.startsWith("vless://", ignoreCase = true) ||
           cleaned.startsWith("vmess://", ignoreCase = true) ||
-          cleaned.startsWith("ssh://", ignoreCase = true)
+          cleaned.startsWith("ssh://", ignoreCase = true) ||
+          cleaned.startsWith(ConfigCrypto.LOCKED_SCHEME, ignoreCase = true)
         ) {
           parseUri(cleaned, isCustom = false)
         } else {
@@ -290,6 +293,8 @@ object VpnLinkParser {
   fun parseUri(uri: String, isCustom: Boolean = true): VpnServer? {
     val trimmed = uri.trim()
     return when {
+      trimmed.startsWith(ConfigCrypto.LOCKED_SCHEME, ignoreCase = true) ->
+        ConfigCrypto.decryptLinkToServer(trimmed, isCustom = isCustom)
       trimmed.startsWith("vless://", ignoreCase = true) -> parseVless(trimmed, isCustom)
       trimmed.startsWith("vmess://", ignoreCase = true) -> parseVmess(trimmed, isCustom)
       trimmed.startsWith("ssh://", ignoreCase = true) -> parseSsh(trimmed, isCustom)
@@ -359,6 +364,82 @@ object VpnLinkParser {
     val querySuffix = if (queryParts.isNotEmpty()) "?${queryParts.joinToString("&")}" else ""
     val remarkSuffix = if (server.name.isNotBlank()) "#${urlEncode(server.name)}" else ""
     return "ssh://$userPart:$passPart@$hostPart:${server.port}$querySuffix$remarkSuffix"
+  }
+
+  fun toShareUri(server: VpnServer, locked: Boolean = false): String {
+    if (server.isLocked || locked) {
+      return if (server.isLocked && ConfigCrypto.isLockedUri(server.rawUri)) {
+        server.rawUri.trim()
+      } else {
+        ConfigCrypto.encryptServerToLink(server)
+      }
+    }
+    return when (server.protocol) {
+      VpnProtocol.SSH -> toSshUri(server)
+      VpnProtocol.VLESS ->
+        if (server.rawUri.trim().startsWith("vless://", ignoreCase = true)) {
+          server.rawUri.trim()
+        } else {
+          toVlessUri(server)
+        }
+      VpnProtocol.VMESS ->
+        if (server.rawUri.trim().startsWith("vmess://", ignoreCase = true)) {
+          server.rawUri.trim()
+        } else {
+          toVmessUri(server)
+        }
+    }
+  }
+
+  private fun toVlessUri(server: VpnServer): String {
+    val hostPart =
+      if (server.address.contains(":") && !server.address.startsWith("[")) {
+        "[${server.address.trim()}]"
+      } else {
+        server.address.trim()
+      }
+    val params = mutableListOf<String>()
+    params.add("encryption=${urlEncode(server.encryption.ifBlank { "none" })}")
+    params.add("security=${urlEncode(server.tlsMode.ifBlank { "none" })}")
+    params.add("type=${urlEncode(server.network.ifBlank { "tcp" })}")
+    if (server.sni.isNotBlank()) params.add("sni=${urlEncode(server.sni)}")
+    if (server.host.isNotBlank()) params.add("host=${urlEncode(server.host)}")
+    if (server.path.isNotBlank()) params.add("path=${urlEncode(server.path)}")
+    if (server.flow.isNotBlank()) params.add("flow=${urlEncode(server.flow)}")
+    if (server.fingerprint.isNotBlank()) params.add("fp=${urlEncode(server.fingerprint)}")
+    if (server.alpn.isNotBlank()) params.add("alpn=${urlEncode(server.alpn)}")
+    if (server.publicKey.isNotBlank()) params.add("pbk=${urlEncode(server.publicKey)}")
+    if (server.shortId.isNotBlank()) params.add("sid=${urlEncode(server.shortId)}")
+    if (server.spiderX.isNotBlank()) params.add("spx=${urlEncode(server.spiderX)}")
+    if (server.serviceName.isNotBlank()) params.add("serviceName=${urlEncode(server.serviceName)}")
+    if (server.allowInsecure) params.add("allowInsecure=1")
+    val remark = if (server.name.isNotBlank()) "#${urlEncode(server.name)}" else ""
+    return "vless://${urlEncode(server.uuid)}@$hostPart:${server.port}?${params.joinToString("&")}$remark"
+  }
+
+  private fun toVmessUri(server: VpnServer): String {
+    val json =
+      JSONObject().apply {
+        put("v", "2")
+        put("ps", server.name)
+        put("add", server.address)
+        put("port", server.port.toString())
+        put("id", server.uuid)
+        put("aid", server.alterId.toString())
+        put("scy", server.security)
+        put("net", server.network)
+        put("type", server.headerType)
+        put("host", server.host)
+        put("path", if (server.network == "grpc" && server.serviceName.isNotBlank()) server.serviceName else server.path)
+        put("tls", if (server.tlsMode == "tls" || server.tlsMode == "reality") server.tlsMode else "")
+        if (server.sni.isNotBlank()) put("sni", server.sni)
+        if (server.alpn.isNotBlank()) put("alpn", server.alpn)
+        if (server.fingerprint.isNotBlank()) put("fp", server.fingerprint)
+        if (server.allowInsecure) put("allowInsecure", "1")
+      }
+    val encoded =
+      Base64.encodeToString(json.toString().toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+    return "vmess://$encoded"
   }
 
   fun parseProxyString(rawProxy: String): Pair<String, Int>? {
@@ -682,8 +763,9 @@ object VpnLinkParser {
           put("payload", s.payload)
           put("sshProxyHost", s.sshProxyHost)
           put("sshProxyPort", s.sshProxyPort)
-          put("rawUri", s.rawUri)
+          put("rawUri", if (s.isLocked && !ConfigCrypto.isLockedUri(s.rawUri)) "" else s.rawUri)
           put("isCustom", s.isCustom)
+          put("isLocked", s.isLocked)
           if (s.latencyMs != null) put("latencyMs", s.latencyMs)
         }
       )
@@ -701,6 +783,8 @@ object VpnLinkParser {
             val protocol =
               runCatching { VpnProtocol.valueOf(o.optString("protocol")) }
                 .getOrNull() ?: continue
+            val locked = o.optBoolean("isLocked", false)
+            val storedRawUri = o.optString("rawUri", "")
             add(
               VpnServer(
                 id = o.optString("id"),
@@ -732,8 +816,9 @@ object VpnLinkParser {
                 payload = o.optString("payload", ""),
                 sshProxyHost = o.optString("sshProxyHost", ""),
                 sshProxyPort = o.optInt("sshProxyPort", 0),
-                rawUri = o.optString("rawUri", ""),
+                rawUri = if (locked && !ConfigCrypto.isLockedUri(storedRawUri)) "" else storedRawUri,
                 isCustom = o.optBoolean("isCustom", false),
+                isLocked = locked,
                 latencyMs = if (o.has("latencyMs")) o.optLong("latencyMs") else null,
               )
             )

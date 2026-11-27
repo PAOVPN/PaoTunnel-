@@ -49,10 +49,18 @@ data class VpnServer(
   val sshProxyPort: Int = 0,
   val rawUri: String = "",
   val isCustom: Boolean = false,
+  val isLocked: Boolean = false,
   val latencyMs: Long? = null,
 ) {
   val sshProxyDisplay: String
     get() = if (sshProxyHost.isNotBlank() && sshProxyPort > 0) "$sshProxyHost:$sshProxyPort" else ""
+
+  val homeDisplaySubtitle: String
+    get() =
+      when (protocol) {
+        VpnProtocol.SSH -> "SSH • Protected Config"
+        VpnProtocol.VLESS, VpnProtocol.VMESS -> "V2Ray • Protected"
+      }
 
   val transportSummary: String
     get() {

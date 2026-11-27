@@ -77,6 +77,8 @@ class MainActivity : ComponentActivity() {
           onOpenImportDialog = { viewModel.openImportDialog() },
           onEditSshServer = { server -> viewModel.openEditSshDialog(server) },
           onCloseImportDialog = { viewModel.closeImportDialog() },
+          onOpenExportDialog = { server -> viewModel.openExportDialog(server) },
+          onCloseExportDialog = { viewModel.closeExportDialog() },
           onImportLink = { link -> viewModel.importCustomServer(link) },
           onAddSshServer = { name, host, port, username, password, payload, httpProxy, editingId ->
             viewModel.addSshServer(

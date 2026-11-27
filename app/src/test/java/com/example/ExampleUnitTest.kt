@@ -133,4 +133,66 @@ class ExampleUnitTest {
       }
     assertTrue(ex.message.orEmpty().contains("403 Forbidden"))
   }
+
+  @Test
+  fun configCrypto_encryptsServerWithAesGcmAndDecryptsAsLockedWithoutLeakingSecrets() {
+    val sshServer =
+      com.example.vpn.model.VpnServer(
+        id = "orig-1",
+        name = "Dtac 🇹🇭",
+        protocol = com.example.vpn.model.VpnProtocol.SSH,
+        address = "157.85.103.29",
+        port = 22,
+        username = "Admin",
+        password = "UltraSecretPassword#99",
+        payload = "CONNECT [host_port] [protocol][crlf][crlf][split]PATCH / HTTP/1.1[crlf]Host: bug.dtac.th[crlf][crlf]",
+        sshProxyHost = "104.18.57.37",
+        sshProxyPort = 80,
+        isCustom = true,
+        isLocked = false,
+      )
+
+    val encryptedLink = com.example.vpn.crypto.ConfigCrypto.encryptServerToLink(sshServer)
+    assertTrue(encryptedLink.startsWith("paolock://"))
+    // Must not expose any sensitive fields in plaintext inside the link
+    assertTrue(!encryptedLink.contains("157.85.103.29"))
+    assertTrue(!encryptedLink.contains("Admin"))
+    assertTrue(!encryptedLink.contains("UltraSecretPassword"))
+    assertTrue(!encryptedLink.contains("104.18.57.37"))
+    assertTrue(!encryptedLink.contains("bug.dtac.th"))
+
+    val decrypted = com.example.vpn.crypto.ConfigCrypto.decryptLinkToServer(encryptedLink, isCustom = true)!!
+    assertTrue(decrypted.isLocked)
+    assertTrue(decrypted.isCustom)
+    assertEquals("Dtac 🇹🇭", decrypted.name)
+    assertEquals("157.85.103.29", decrypted.address)
+    assertEquals(22, decrypted.port)
+    assertEquals("Admin", decrypted.username)
+    assertEquals("UltraSecretPassword#99", decrypted.password)
+    assertEquals("104.18.57.37", decrypted.sshProxyHost)
+    assertEquals(80, decrypted.sshProxyPort)
+    assertEquals(sshServer.payload, decrypted.payload)
+    assertEquals("SSH • Protected Config", decrypted.homeDisplaySubtitle)
+    assertEquals(encryptedLink, decrypted.rawUri)
+
+    // Verify AES-GCM integrity check rejects tampered links
+    val lastChar = encryptedLink.last()
+    val tamperedChar = if (lastChar == 'A') 'B' else 'A'
+    val tamperedLink = encryptedLink.dropLast(1) + tamperedChar
+    assertEquals(null, com.example.vpn.crypto.ConfigCrypto.decryptLinkToServer(tamperedLink))
+  }
+
+  @Test
+  fun vpnServer_homeDisplaySubtitleHidesIpHostAndCredentials() {
+    val vlessServer =
+      com.example.vpn.model.VpnServer(
+        id = "v1",
+        name = "SG VLESS",
+        protocol = com.example.vpn.model.VpnProtocol.VLESS,
+        address = "45.32.100.10",
+        port = 443,
+        uuid = "11111111-2222-3333-4444-555555555555",
+      )
+    assertEquals("V2Ray • Protected", vlessServer.homeDisplaySubtitle)
+  }
 }

@@ -113,11 +113,17 @@ class ServerRepository(private val context: Context) {
   suspend fun addCustomServer(uri: String): Result<VpnServer> =
     withContext(Dispatchers.IO) {
       runCatching {
-        val parsed =
-          VpnLinkParser.parseUri(uri, isCustom = true)
-            ?: error("Invalid link. Please paste a valid vless://, vmess://, or ssh:// link.")
-        saveCustomServer(parsed)
-        parsed
+        val direct = VpnLinkParser.parseUri(uri, isCustom = true)
+        if (direct != null) {
+          saveCustomServer(direct)
+          return@runCatching direct
+        }
+        val batch = VpnLinkParser.parseServersPayload(uri).map { it.copy(isCustom = true) }
+        if (batch.isNotEmpty()) {
+          batch.asReversed().forEach { saveCustomServer(it) }
+          return@runCatching batch.first()
+        }
+        error("Invalid link or file. Please use a valid vless://, vmess://, ssh://, or paolock:// config.")
       }
     }
 
@@ -146,6 +152,12 @@ class ServerRepository(private val context: Context) {
             VpnLinkParser.parseProxyString(httpProxy)
               ?: error("Invalid HTTP Proxy format. Use proxy_ip:proxy_port (e.g. 104.16.0.1:80).")
           }
+
+        if (editingServerId != null) {
+          val isTargetLocked =
+            allServersFlow.first().any { it.id == editingServerId && it.isLocked }
+          require(!isTargetLocked) { "Locked configs cannot be modified." }
+        }
 
         val server =
           VpnLinkParser.createSshServer(

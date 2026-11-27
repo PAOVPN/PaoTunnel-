@@ -52,6 +52,7 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Public
@@ -60,7 +61,6 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WarningAmber
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -135,6 +135,8 @@ fun MainScreen(
   onOpenImportDialog: () -> Unit,
   onEditSshServer: (VpnServer) -> Unit,
   onCloseImportDialog: () -> Unit,
+  onOpenExportDialog: (VpnServer) -> Unit,
+  onCloseExportDialog: () -> Unit,
   onImportLink: (String) -> Unit,
   onAddSshServer: (
     name: String,
@@ -244,35 +246,15 @@ fun MainScreen(
           onPingSelected = onPingSelected,
           onOpenImportDialog = onOpenImportDialog,
           onEditSshServer = onEditSshServer,
-          onCopySshServer = { server ->
-            copyToClipboard(context, VpnLinkParser.toSshUri(server))
-            onShowMessage("Copied ssh:// link for ${server.name}")
+          onOpenExportDialog = onOpenExportDialog,
+          onCopyServer = { server ->
+            if (!server.isLocked) {
+              copyToClipboard(context, VpnLinkParser.toShareUri(server, locked = false))
+              onShowMessage("Copied ${server.protocol.displayName} link for ${server.name}")
+            }
           },
           onDeleteCustomServer = onDeleteCustomServer,
         )
-
-        // Pre-filled SSH details & Copy/Share quick bar when an SSH node is selected
-        val activeSshServer = uiState.selectedServer?.takeIf { it.protocol == VpnProtocol.SSH }
-        AnimatedVisibility(
-          visible = activeSshServer != null,
-          enter = fadeIn(),
-          exit = fadeOut(),
-        ) {
-          if (activeSshServer != null) {
-            SshConfigQuickCard(
-              server = activeSshServer,
-              onEditClick = { onEditSshServer(activeSshServer) },
-              onCopyLink = {
-                copyToClipboard(context, VpnLinkParser.toSshUri(activeSshServer))
-                onShowMessage("Copied ssh:// link for ${activeSshServer.name}")
-              },
-              onShareLink = {
-                shareText(context, VpnLinkParser.toSshUri(activeSshServer), activeSshServer.name)
-              },
-              modifier = Modifier.padding(top = 10.dp),
-            )
-          }
-        }
 
         // Error or preview core info pill
         AnimatedVisibility(
@@ -336,10 +318,24 @@ fun MainScreen(
       onDismiss = onCloseImportDialog,
       onImportLink = onImportLink,
       onAddSshServer = onAddSshServer,
-      onCopySshUri = { uri ->
+      onExportServer = { server -> onOpenExportDialog(server) },
+    )
+  }
+
+  val exportingServer = uiState.exportingServer
+  if (exportingServer != null && !exportingServer.isLocked) {
+    ExportConfigDialog(
+      server = exportingServer,
+      onDismiss = onCloseExportDialog,
+      onCopyUri = { uri, isLocked ->
         copyToClipboard(context, uri)
-        onShowMessage("Copied ssh:// link to clipboard")
+        val label = if (isLocked) "locked paolock://" else exportingServer.protocol.displayName
+        onShowMessage("Copied $label link for ${exportingServer.name}")
       },
+      onShareUri = { uri, title ->
+        shareText(context, uri, title)
+      },
+      onShowMessage = onShowMessage,
     )
   }
 }
@@ -439,7 +435,8 @@ private fun ServerSelectorDropdown(
   onPingSelected: () -> Unit,
   onOpenImportDialog: () -> Unit,
   onEditSshServer: (VpnServer) -> Unit,
-  onCopySshServer: (VpnServer) -> Unit,
+  onOpenExportDialog: (VpnServer) -> Unit,
+  onCopyServer: (VpnServer) -> Unit,
   onDeleteCustomServer: (String) -> Unit,
 ) {
   var expanded by remember { mutableStateOf(false) }
@@ -489,20 +486,33 @@ private fun ServerSelectorDropdown(
             ProtocolBadge(protocol = selectedServer.protocol)
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = selectedServer.name,
-                style = MaterialTheme.typography.titleMedium,
-                color = TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                  text = selectedServer.name,
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.weight(1f, fill = false),
+                )
+                if (selectedServer.isLocked) {
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Icon(
+                    imageVector = Icons.Rounded.Lock,
+                    contentDescription = "Locked config",
+                    tint = AmberConnecting,
+                    modifier = Modifier.size(15.dp).testTag("selected_locked_icon"),
+                  )
+                }
+              }
               Spacer(modifier = Modifier.height(2.dp))
               Text(
-                text = "${selectedServer.transportSummary} · ${selectedServer.address}:${selectedServer.port}",
+                text = selectedServer.homeDisplaySubtitle,
                 style = MaterialTheme.typography.labelSmall,
                 color = TextSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("selected_server_subtitle"),
               )
             }
             if (selectedServer.latencyMs != null) {
@@ -520,6 +530,19 @@ private fun ServerSelectorDropdown(
                 tint = if (isPinging) AmberConnecting else CyanPulse,
                 modifier = Modifier.size(20.dp),
               )
+            }
+            if (!selectedServer.isLocked) {
+              IconButton(
+                onClick = { onOpenExportDialog(selectedServer) },
+                modifier = Modifier.size(40.dp).testTag("selected_share_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.Share,
+                  contentDescription = "Share or export config",
+                  tint = EmeraldShield,
+                  modifier = Modifier.size(19.dp),
+                )
+              }
             }
           } else {
             Icon(
@@ -588,15 +611,27 @@ private fun ServerSelectorDropdown(
                   ProtocolBadge(protocol = server.protocol)
                   Spacer(modifier = Modifier.width(10.dp))
                   Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                      Text(
+                        text = server.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (isSelected) EmeraldShield else TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                      )
+                      if (server.isLocked) {
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Icon(
+                          imageVector = Icons.Rounded.Lock,
+                          contentDescription = "Locked config",
+                          tint = AmberConnecting,
+                          modifier = Modifier.size(14.dp),
+                        )
+                      }
+                    }
                     Text(
-                      text = server.name,
-                      style = MaterialTheme.typography.bodyLarge,
-                      color = if (isSelected) EmeraldShield else TextPrimary,
-                      maxLines = 1,
-                      overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                      text = "${server.transportSummary} · ${server.address}:${server.port}",
+                      text = server.homeDisplaySubtitle,
                       style = MaterialTheme.typography.labelSmall,
                       color = TextMuted,
                       maxLines = 1,
@@ -615,34 +650,50 @@ private fun ServerSelectorDropdown(
                       modifier = Modifier.size(18.dp),
                     )
                   }
-                  if (server.protocol == VpnProtocol.SSH) {
+                  if (!server.isLocked) {
                     IconButton(
                       onClick = {
                         expanded = false
-                        onCopySshServer(server)
+                        onOpenExportDialog(server)
                       },
-                      modifier = Modifier.size(36.dp).testTag("dropdown_copy_ssh_button"),
+                      modifier = Modifier.size(36.dp).testTag("dropdown_share_button"),
                     ) {
                       Icon(
-                        imageVector = Icons.Rounded.ContentCopy,
-                        contentDescription = "Copy SSH link",
-                        tint = CyanPulse,
+                        imageVector = Icons.Rounded.Share,
+                        contentDescription = "Share or export config",
+                        tint = EmeraldShield,
                         modifier = Modifier.size(17.dp),
                       )
                     }
                     IconButton(
                       onClick = {
                         expanded = false
-                        onEditSshServer(server)
+                        onCopyServer(server)
                       },
-                      modifier = Modifier.size(36.dp).testTag("dropdown_edit_ssh_button"),
+                      modifier = Modifier.size(36.dp).testTag("dropdown_copy_button"),
                     ) {
                       Icon(
-                        imageVector = Icons.Rounded.Tune,
-                        contentDescription = "Edit SSH config",
-                        tint = AmberConnecting,
+                        imageVector = Icons.Rounded.ContentCopy,
+                        contentDescription = "Copy config link",
+                        tint = CyanPulse,
                         modifier = Modifier.size(17.dp),
                       )
+                    }
+                    if (server.protocol == VpnProtocol.SSH) {
+                      IconButton(
+                        onClick = {
+                          expanded = false
+                          onEditSshServer(server)
+                        },
+                        modifier = Modifier.size(36.dp).testTag("dropdown_edit_ssh_button"),
+                      ) {
+                        Icon(
+                          imageVector = Icons.Rounded.Tune,
+                          contentDescription = "Edit SSH config",
+                          tint = AmberConnecting,
+                          modifier = Modifier.size(17.dp),
+                        )
+                      }
                     }
                   }
                   if (server.isCustom) {
@@ -1082,85 +1133,6 @@ private fun ErrorInfoBanner(
   }
 }
 
-@Composable
-private fun SshConfigQuickCard(
-  server: VpnServer,
-  onEditClick: () -> Unit,
-  onCopyLink: () -> Unit,
-  onShareLink: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Surface(
-    shape = RoundedCornerShape(16.dp),
-    color = DeepNavySurface,
-    border = BorderStroke(1.dp, AmberConnecting.copy(alpha = 0.35f)),
-    modifier = modifier.fillMaxWidth().testTag("ssh_quick_card"),
-  ) {
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "User: ${server.username} · Port: ${server.port}",
-            style = MaterialTheme.typography.labelMedium.copy(fontFamily = JetBrainsMonoFamily),
-            color = TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          val proxyPart =
-            if (server.sshProxyDisplay.isNotBlank()) "Proxy: ${server.sshProxyDisplay}" else "Direct TCP"
-          val payloadPart = if (server.payload.isNotBlank()) "Custom Payload" else "No Payload"
-          Text(
-            text = "$proxyPart · $payloadPart",
-            style = MaterialTheme.typography.labelSmall,
-            color = TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          IconButton(
-            onClick = onEditClick,
-            modifier = Modifier.size(44.dp).testTag("ssh_view_edit_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Rounded.Tune,
-              contentDescription = "View or edit SSH config",
-              tint = AmberConnecting,
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          IconButton(
-            onClick = onCopyLink,
-            modifier = Modifier.size(44.dp).testTag("ssh_copy_link_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Rounded.ContentCopy,
-              contentDescription = "Copy SSH link",
-              tint = CyanPulse,
-              modifier = Modifier.size(19.dp),
-            )
-          }
-          IconButton(
-            onClick = onShareLink,
-            modifier = Modifier.size(44.dp).testTag("ssh_share_link_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Rounded.Share,
-              contentDescription = "Share SSH link",
-              tint = EmeraldShield,
-              modifier = Modifier.size(19.dp),
-            )
-          }
-        }
-      }
-    }
-  }
-}
-
 private fun copyToClipboard(context: Context, text: String) {
   val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
   clipboard?.setPrimaryClip(ClipData.newPlainText("PAO Tunnel Link", text))
@@ -1173,7 +1145,7 @@ private fun shareText(context: Context, text: String, title: String) {
       putExtra(Intent.EXTRA_SUBJECT, title)
       putExtra(Intent.EXTRA_TEXT, text)
     }
-  context.startActivity(Intent.createChooser(intent, "Share SSH Link"))
+  context.startActivity(Intent.createChooser(intent, "Share Config Link"))
 }
 
 private fun formatDuration(totalSeconds: Long): String {
