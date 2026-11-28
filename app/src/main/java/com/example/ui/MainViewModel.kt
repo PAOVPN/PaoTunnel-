@@ -105,8 +105,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = MainUiState(runtimeState = VpnStateHolder.state.value),
       )
 
+  private var syncedThisSession = false
+
   init {
     autoSyncOnLaunch()
+  }
+
+  fun syncOnAppForegroundIfNeeded() {
+    if (!syncedThisSession) {
+      autoSyncOnLaunch()
+    }
   }
 
   private fun autoSyncOnLaunch() {
@@ -126,6 +134,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
       repository
         .updateServersFromRemote()
         .onSuccess { outcome ->
+          syncedThisSession = true
           transientState.update { state ->
             state.copy(
               isUpdatingServers = false,
