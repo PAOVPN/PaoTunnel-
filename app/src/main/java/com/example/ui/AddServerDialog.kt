@@ -24,9 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -42,10 +40,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -79,12 +75,10 @@ import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import com.example.vpn.parser.VpnLinkParser
 import java.nio.charset.StandardCharsets
-import java.util.Locale
 
 private enum class AddServerTab {
   V2RAY_LINK,
   SSH_FORM,
-  UDP_ZIVPN,
 }
 
 @Composable
@@ -106,29 +100,14 @@ fun AddServerDialog(
     slowDnsPublicKey: String,
     editingServerId: String?,
   ) -> Unit,
-  onAddUdpServer: (
-    name: String,
-    host: String,
-    portRange: String,
-    password: String,
-    receiveWindow: Int,
-    editingServerId: String?,
-  ) -> Unit,
   onExportServer: (VpnServer) -> Unit = {},
 ) {
   val context = LocalContext.current
   val safeEditingServer = editingServer?.takeUnless { it.isLocked }
   val isEditingSsh = safeEditingServer?.protocol == VpnProtocol.SSH
-  val isEditingUdp = safeEditingServer?.protocol == VpnProtocol.UDP
   var activeTab by
     remember(safeEditingServer?.id) {
-      mutableStateOf(
-        when {
-          isEditingSsh -> AddServerTab.SSH_FORM
-          isEditingUdp -> AddServerTab.UDP_ZIVPN
-          else -> AddServerTab.V2RAY_LINK
-        }
-      )
+      mutableStateOf(if (isEditingSsh) AddServerTab.SSH_FORM else AddServerTab.V2RAY_LINK)
     }
   var linkInput by remember { mutableStateOf("") }
 
@@ -180,23 +159,6 @@ fun AddServerDialog(
   var slowDnsPublicKey by
     remember(safeEditingServer?.id) { mutableStateOf(if (isEditingSsh) safeEditingServer?.slowDnsPublicKey.orEmpty() else "") }
 
-  // ZIVPN UDP state
-  var udpName by
-    remember(safeEditingServer?.id) { mutableStateOf(if (isEditingUdp) safeEditingServer?.name.orEmpty() else "") }
-  var udpHost by
-    remember(safeEditingServer?.id) { mutableStateOf(if (isEditingUdp) safeEditingServer?.address.orEmpty() else "") }
-  val defaultUdpPortRange =
-    if (isEditingUdp) safeEditingServer?.effectiveUdpPortRange ?: "6000-19999" else "6000-19999"
-  var udpPassword by
-    remember(safeEditingServer?.id) { mutableStateOf(if (isEditingUdp) safeEditingServer?.password.orEmpty() else "") }
-  var udpPasswordVisible by remember { mutableStateOf(false) }
-  var udpReceiveWindow by
-    remember(safeEditingServer?.id) {
-      mutableIntStateOf(
-        if (isEditingUdp) (safeEditingServer?.udpReceiveWindow ?: 2).coerceIn(1, 64) else 2
-      )
-    }
-
   val isSlowDns = sshTunnelMode == SshTunnelMode.SLOW_DNS
   val parsedSshPort = sshPortText.trim().toIntOrNull()
   val cleanPubkey = slowDnsPublicKey.trim()
@@ -217,11 +179,6 @@ fun AddServerDialog(
         sshUsername.isNotBlank()
     }
 
-  val isUdpValid =
-    udpHost.isNotBlank() &&
-      udpPassword.isNotEmpty() &&
-      udpReceiveWindow in 1..64
-
   val fieldColors =
     OutlinedTextFieldDefaults.colors(
       focusedBorderColor = CyanPulse,
@@ -240,12 +197,7 @@ fun AddServerDialog(
     textContentColor = TextSecondary,
     title = {
       Text(
-        text =
-          when {
-            isEditingSsh -> "SSH Server Config"
-            isEditingUdp -> "UDP (ZIVPN) Config"
-            else -> stringResource(R.string.import_link)
-          },
+        text = if (isEditingSsh) "SSH Server Config" else stringResource(R.string.import_link),
         style = MaterialTheme.typography.titleLarge,
       )
     },
@@ -275,13 +227,6 @@ fun AddServerDialog(
             onClick = { activeTab = AddServerTab.SSH_FORM },
             modifier = Modifier.weight(1f).testTag("protocol_tab_ssh"),
           )
-          ProtocolTabButton(
-            label = "UDP (ZIVPN)",
-            selected = activeTab == AddServerTab.UDP_ZIVPN,
-            accentColor = EmeraldShield,
-            onClick = { activeTab = AddServerTab.UDP_ZIVPN },
-            modifier = Modifier.weight(1f).testTag("protocol_tab_udp"),
-          )
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -289,7 +234,7 @@ fun AddServerDialog(
         when (activeTab) {
           AddServerTab.V2RAY_LINK -> {
             Text(
-              text = "Paste a vless://, vmess://, ssh://, udp://, or locked paolock:// link, or import a .pao config file.",
+              text = "Paste a vless://, vmess://, ssh://, or locked paolock:// link, or import a .pao config file.",
               style = MaterialTheme.typography.bodyMedium,
               color = TextSecondary,
             )
@@ -299,7 +244,7 @@ fun AddServerDialog(
               onValueChange = { linkInput = it },
               placeholder = {
                 Text(
-                  text = "vless://, vmess://, ssh://, udp://, or paolock://...",
+                  text = "vless://, vmess://, ssh://, or paolock://...",
                   style = MaterialTheme.typography.bodyMedium,
                   color = TextMuted,
                 )
@@ -631,168 +576,6 @@ fun AddServerDialog(
               }
             }
           }
-
-          AddServerTab.UDP_ZIVPN -> {
-            Column(
-              modifier =
-                Modifier.fillMaxWidth()
-                  .heightIn(max = 420.dp)
-                  .verticalScroll(rememberScrollState()),
-              verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-              OutlinedTextField(
-                value = udpName,
-                onValueChange = { udpName = it },
-                label = { Text("Server Name / Remark") },
-                placeholder = { Text("SG ZIVPN UDP", color = TextMuted) },
-                singleLine = true,
-                colors = fieldColors,
-                modifier = Modifier.fillMaxWidth().testTag("udp_name_input"),
-              )
-
-              OutlinedTextField(
-                value = udpHost,
-                onValueChange = { udpHost = it },
-                label = { Text("UDP Server (Host / IP)") },
-                placeholder = { Text("vps.example.com or 157.85.103.29", color = TextMuted) },
-                singleLine = true,
-                colors = fieldColors,
-                modifier = Modifier.fillMaxWidth().testTag("udp_host_input"),
-              )
-
-              OutlinedTextField(
-                value = udpPassword,
-                onValueChange = { udpPassword = it },
-                label = { Text("UDP Password / Auth") },
-                placeholder = { Text("zivpn", color = TextMuted) },
-                singleLine = true,
-                visualTransformation =
-                  if (udpPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                  IconButton(onClick = { udpPasswordVisible = !udpPasswordVisible }) {
-                    Icon(
-                      imageVector =
-                        if (udpPasswordVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                      contentDescription = if (udpPasswordVisible) "Hide password" else "Show password",
-                      tint = TextSecondary,
-                      modifier = Modifier.size(20.dp),
-                    )
-                  }
-                },
-                colors = fieldColors,
-                modifier = Modifier.fillMaxWidth().testTag("udp_password_input"),
-              )
-
-              // Receive Window (- / + Stepper, default 2)
-              Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = DeepNavySurface,
-                border = BorderStroke(1.dp, SlateOutline),
-                modifier = Modifier.fillMaxWidth(),
-              ) {
-                Row(
-                  modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                  Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                      text = "Receive Window",
-                      style = MaterialTheme.typography.labelLarge,
-                      color = TextPrimary,
-                    )
-                    Text(
-                      text =
-                        "Conn ${udpReceiveWindow}M · Total ${
-                          String.format(Locale.US, "%.1f", udpReceiveWindow * 2.5)
-                        }M",
-                      style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),
-                      color = TextMuted,
-                    )
-                  }
-                  Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                  ) {
-                    IconButton(
-                      onClick = { if (udpReceiveWindow > 1) udpReceiveWindow -= 1 },
-                      enabled = udpReceiveWindow > 1,
-                      modifier =
-                        Modifier.minimumInteractiveComponentSize()
-                          .size(44.dp)
-                          .clip(RoundedCornerShape(10.dp))
-                          .background(ElevatedSlateCard)
-                          .border(1.dp, SlateOutline, RoundedCornerShape(10.dp))
-                          .testTag("udp_window_minus"),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Rounded.Remove,
-                        contentDescription = "Decrease receive window",
-                        tint = if (udpReceiveWindow > 1) TextPrimary else TextMuted,
-                        modifier = Modifier.size(18.dp),
-                      )
-                    }
-                    Text(
-                      text = udpReceiveWindow.toString(),
-                      style =
-                        MaterialTheme.typography.titleMedium.copy(
-                          fontFamily = JetBrainsMonoFamily,
-                          fontWeight = FontWeight.Bold,
-                        ),
-                      color = EmeraldShield,
-                      modifier = Modifier.padding(horizontal = 6.dp).testTag("udp_window_value"),
-                    )
-                    IconButton(
-                      onClick = { if (udpReceiveWindow < 64) udpReceiveWindow += 1 },
-                      enabled = udpReceiveWindow < 64,
-                      modifier =
-                        Modifier.minimumInteractiveComponentSize()
-                          .size(44.dp)
-                          .clip(RoundedCornerShape(10.dp))
-                          .background(ElevatedSlateCard)
-                          .border(1.dp, SlateOutline, RoundedCornerShape(10.dp))
-                          .testTag("udp_window_plus"),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Rounded.Add,
-                        contentDescription = "Increase receive window",
-                        tint = if (udpReceiveWindow < 64) EmeraldShield else TextMuted,
-                        modifier = Modifier.size(18.dp),
-                      )
-                    }
-                  }
-                }
-              }
-
-              if (isUdpValid) {
-                OutlinedButton(
-                  onClick = {
-                    val previewServer =
-                      VpnLinkParser.createUdpServer(
-                        name = udpName,
-                        host = udpHost,
-                        portRange = defaultUdpPortRange,
-                        password = udpPassword,
-                        receiveWindow = udpReceiveWindow,
-                        isCustom = true,
-                      )
-                    onExportServer(previewServer)
-                  },
-                  border = BorderStroke(1.dp, CyanPulse.copy(alpha = 0.45f)),
-                  colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanPulse),
-                  modifier = Modifier.fillMaxWidth().testTag("udp_dialog_export_button"),
-                ) {
-                  Icon(
-                    imageVector = Icons.Rounded.Share,
-                    contentDescription = "Share or export config",
-                    modifier = Modifier.size(16.dp),
-                  )
-                  Spacer(modifier = Modifier.size(6.dp))
-                  Text("Share / Export Config", style = MaterialTheme.typography.labelLarge)
-                }
-              }
-            }
-          }
         }
       }
     },
@@ -833,25 +616,6 @@ fun AddServerDialog(
             Text(if (isEditingSsh) "Update SSH" else "Save SSH", style = MaterialTheme.typography.labelLarge)
           }
         }
-        AddServerTab.UDP_ZIVPN -> {
-          Button(
-            onClick = {
-              onAddUdpServer(
-                udpName,
-                udpHost,
-                defaultUdpPortRange,
-                udpPassword,
-                udpReceiveWindow,
-                safeEditingServer?.id,
-              )
-            },
-            enabled = isUdpValid,
-            colors = ButtonDefaults.buttonColors(containerColor = EmeraldShield, contentColor = ObsidianBg),
-            modifier = Modifier.testTag("udp_save_button"),
-          ) {
-            Text(if (isEditingUdp) "Update UDP" else "Save UDP", style = MaterialTheme.typography.labelLarge)
-          }
-        }
       }
     },
     dismissButton = {
@@ -882,14 +646,14 @@ private fun ProtocolTabButton(
           shape = RoundedCornerShape(10.dp),
         )
         .clickable(onClick = onClick)
-        .padding(horizontal = 6.dp, vertical = 10.dp),
+        .padding(horizontal = 10.dp, vertical = 10.dp),
     contentAlignment = Alignment.Center,
   ) {
     Text(
       text = label,
       style =
         MaterialTheme.typography.labelLarge.copy(
-          fontSize = 11.5.sp,
+          fontSize = 13.sp,
           fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
         ),
       color = if (selected) accentColor else TextSecondary,

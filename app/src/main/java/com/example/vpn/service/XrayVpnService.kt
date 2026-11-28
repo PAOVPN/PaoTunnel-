@@ -23,7 +23,6 @@ import com.example.vpn.parser.VpnLinkParser
 import com.example.vpn.parser.XrayConfigBuilder
 import com.example.vpn.ssh.SlowDnsManager
 import com.example.vpn.ssh.SshTunnelManager
-import com.example.vpn.udp.HysteriaUdpManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -107,7 +106,6 @@ class XrayVpnService : VpnService() {
             XrayCoreAdapterImpl.stop()
             SshTunnelManager.stop()
             SlowDnsManager.stop()
-            HysteriaUdpManager.stop()
             runCatching { vpnInterface?.close() }
             vpnInterface = null
 
@@ -127,15 +125,12 @@ class XrayVpnService : VpnService() {
 
             val isSsh = server.protocol == VpnProtocol.SSH
             val isSlowDns = server.isSlowDns
-            val isUdp = server.protocol == VpnProtocol.UDP
             if (isSsh) {
               if (isSlowDns) {
                 SlowDnsManager.start(applicationContext, server).getOrThrow()
               }
               SshTunnelManager.start(server, SshTunnelManager.DEFAULT_LOCAL_SOCKS_PORT)
                 .getOrThrow()
-            } else if (isUdp) {
-              HysteriaUdpManager.start(applicationContext, server).getOrThrow()
             }
 
             val tunPfd =
@@ -161,7 +156,6 @@ class XrayVpnService : VpnService() {
                 server = server,
                 enableTunInbound = true,
                 sshLocalSocksPort = SshTunnelManager.DEFAULT_LOCAL_SOCKS_PORT,
-                udpLocalSocksPort = HysteriaUdpManager.LOCAL_SOCKS_PORT,
               )
 
             val result =
@@ -177,7 +171,7 @@ class XrayVpnService : VpnService() {
                         connectedAtElapsedMs = SystemClock.elapsedRealtime(),
                       )
                       startForegroundNotification(server.name, connecting = false)
-                      startTrafficPolling(isSsh, isSlowDns, isUdp)
+                      startTrafficPolling(isSsh, isSlowDns)
                     }
 
                     override fun onCoreStopped() {
@@ -201,7 +195,7 @@ class XrayVpnService : VpnService() {
                 connectedAtElapsedMs = SystemClock.elapsedRealtime(),
               )
               startForegroundNotification(server.name, connecting = false)
-              startTrafficPolling(isSsh, isSlowDns, isUdp)
+              startTrafficPolling(isSsh, isSlowDns)
             }
           }
           .onFailure { error ->
@@ -210,7 +204,6 @@ class XrayVpnService : VpnService() {
             XrayCoreAdapterImpl.stop()
             SshTunnelManager.stop()
             SlowDnsManager.stop()
-            HysteriaUdpManager.stop()
             VpnStateHolder.setDisconnected(error.message ?: "Failed to start VPN tunnel.")
             stopForegroundCompat()
             stopSelf()
@@ -218,7 +211,7 @@ class XrayVpnService : VpnService() {
       }
   }
 
-  private fun startTrafficPolling(isSsh: Boolean, isSlowDns: Boolean, isUdp: Boolean) {
+  private fun startTrafficPolling(isSsh: Boolean, isSlowDns: Boolean) {
     statsJob?.cancel()
     statsJob =
       serviceScope.launch {
@@ -226,8 +219,7 @@ class XrayVpnService : VpnService() {
           isActive &&
             XrayCoreAdapterImpl.isRunning &&
             (!isSsh || SshTunnelManager.isRunning) &&
-            (!isSlowDns || SlowDnsManager.isRunning) &&
-            (!isUdp || HysteriaUdpManager.isRunning)
+            (!isSlowDns || SlowDnsManager.isRunning)
         ) {
           val (up, down) =
             if (isSsh) {
@@ -238,11 +230,7 @@ class XrayVpnService : VpnService() {
           VpnStateHolder.updateTrafficStats(up, down)
           delay(1000L)
         }
-        if (isActive &&
-          ((isSsh && !SshTunnelManager.isRunning) ||
-            (isSlowDns && !SlowDnsManager.isRunning) ||
-            (isUdp && !HysteriaUdpManager.isRunning))
-        ) {
+        if (isActive && ((isSsh && !SshTunnelManager.isRunning) || (isSlowDns && !SlowDnsManager.isRunning))) {
           disconnectAndStop()
         }
       }
@@ -256,7 +244,6 @@ class XrayVpnService : VpnService() {
       XrayCoreAdapterImpl.stop()
       SshTunnelManager.stop()
       SlowDnsManager.stop()
-      HysteriaUdpManager.stop()
       runCatching { vpnInterface?.close() }
       vpnInterface = null
       VpnStateHolder.setDisconnected(null)
@@ -276,7 +263,6 @@ class XrayVpnService : VpnService() {
     XrayCoreAdapterImpl.stop()
     SshTunnelManager.stop()
     SlowDnsManager.stop()
-    HysteriaUdpManager.stop()
     runCatching { vpnInterface?.close() }
     vpnInterface = null
     serviceScope.cancel()

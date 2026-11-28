@@ -13,7 +13,6 @@ val CyanPulse = Color(0xFF38BDF8)
 val CyanDim = Color(0xFF0E344D)
 
 val AmberConnecting = Color(0xFFF59E0B)
-val VioletUdp = Color(0xFFA78BFA)
 val CoralDisconnect = Color(0xFFFB7185)
 val CoralDim = Color(0xFF3E1622)
 

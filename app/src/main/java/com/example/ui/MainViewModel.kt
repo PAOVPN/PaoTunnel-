@@ -179,7 +179,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         .onFailure { error ->
           transientState.update {
-            it.copy(statusBannerMessage = error.message ?: "Invalid VLESS, VMess, SSH, UDP, or locked link.")
+            it.copy(statusBannerMessage = error.message ?: "Invalid VLESS, VMess, SSH, or locked link.")
           }
         }
     }
@@ -233,46 +233,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .onFailure { error ->
           transientState.update {
             it.copy(statusBannerMessage = error.message ?: "Invalid SSH / SlowDNS server settings.")
-          }
-        }
-    }
-  }
-
-  fun addUdpServer(
-    name: String,
-    host: String,
-    portRange: String,
-    password: String,
-    receiveWindow: Int,
-    editingServerId: String?,
-  ) {
-    viewModelScope.launch {
-      repository
-        .addUdpServer(
-          name = name,
-          host = host,
-          portRange = portRange,
-          password = password,
-          receiveWindow = receiveWindow,
-          editingServerId = editingServerId,
-        )
-        .onSuccess { server ->
-          transientState.update {
-            it.copy(
-              showImportDialog = false,
-              editingServer = null,
-              statusBannerMessage =
-                if (editingServerId != null) {
-                  "Updated UDP Server: ${server.name}"
-                } else {
-                  "Added UDP Server: ${server.name}"
-                },
-            )
-          }
-        }
-        .onFailure { error ->
-          transientState.update {
-            it.copy(statusBannerMessage = error.message ?: "Invalid ZIVPN UDP server settings.")
           }
         }
     }

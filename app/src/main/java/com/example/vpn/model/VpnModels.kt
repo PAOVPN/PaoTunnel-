@@ -6,7 +6,6 @@ enum class VpnProtocol(val displayName: String) {
   VLESS("VLESS"),
   VMESS("VMess"),
   SSH("SSH"),
-  UDP("UDP"),
 }
 
 enum class SshTunnelMode(val displayName: String) {
@@ -57,8 +56,6 @@ data class VpnServer(
   val slowDnsServerIp: String = "",
   val slowDnsNameserver: String = "",
   val slowDnsPublicKey: String = "",
-  val udpPortRange: String = "6000-19999",
-  val udpReceiveWindow: Int = 2,
   val rawUri: String = "",
   val isCustom: Boolean = false,
   val isLocked: Boolean = false,
@@ -70,9 +67,6 @@ data class VpnServer(
   val isSlowDns: Boolean
     get() = protocol == VpnProtocol.SSH && sshTunnelMode == SshTunnelMode.SLOW_DNS
 
-  val effectiveUdpPortRange: String
-    get() = udpPortRange.trim().ifBlank { if (port in 1..65535) port.toString() else "6000-19999" }
-
   val homeDisplaySubtitle: String
     get() =
       when (protocol) {
@@ -82,15 +76,11 @@ data class VpnServer(
           } else {
             "SSH • Protected Config"
           }
-        VpnProtocol.UDP -> "UDP • Protected Config"
         VpnProtocol.VLESS, VpnProtocol.VMESS -> "V2Ray • Protected"
       }
 
   val transportSummary: String
     get() {
-      if (protocol == VpnProtocol.UDP) {
-        return "HYSTERIA UDP · WIN $udpReceiveWindow"
-      }
       if (protocol == VpnProtocol.SSH) {
         if (sshTunnelMode == SshTunnelMode.SLOW_DNS) {
           val userPrefix = if (username.isNotBlank()) "$username · " else ""

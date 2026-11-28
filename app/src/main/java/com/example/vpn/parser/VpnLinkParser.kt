@@ -66,7 +66,6 @@ object VpnLinkParser {
               "items",
               "results",
               "ssh",
-              "udp",
               "v2ray",
               "links",
               "proxies",
@@ -110,7 +109,7 @@ object VpnLinkParser {
         obj.optString("serverName"),
       )
 
-    // Case A: Object wraps a share link under url/link/config/uri/vless/vmess/ssh/udp/node
+    // Case A: Object wraps a share link under url/link/config/uri/vless/vmess/ssh/node
     val linkCandidate =
       listOf(
           obj.optString("url"),
@@ -121,8 +120,6 @@ object VpnLinkParser {
           obj.optString("vless"),
           obj.optString("vmess"),
           obj.optString("ssh"),
-          obj.optString("udp"),
-          obj.optString("hysteria"),
           obj.optString("node"),
         )
         .map { it.trim() }
@@ -132,7 +129,6 @@ object VpnLinkParser {
             (candidate.startsWith("vless://", ignoreCase = true) ||
               candidate.startsWith("vmess://", ignoreCase = true) ||
               candidate.startsWith("ssh://", ignoreCase = true) ||
-              candidate.startsWith("udp://", ignoreCase = true) ||
               candidate.startsWith(ConfigCrypto.LOCKED_SCHEME, ignoreCase = true))
         }
         .orEmpty()
@@ -159,54 +155,8 @@ object VpnLinkParser {
         "vless" -> VpnProtocol.VLESS
         "vmess" -> VpnProtocol.VMESS
         "ssh" -> VpnProtocol.SSH
-        "udp", "zivpn", "hysteria", "hysteria-udp" -> VpnProtocol.UDP
         else -> return null
       }
-
-    if (protocol == VpnProtocol.UDP) {
-      val host =
-        firstNonBlank(
-          obj.optString("host"),
-          obj.optString("address"),
-          obj.optString("add"),
-          obj.optString("ip"),
-          obj.optString("server"),
-        )
-      val rawPortRange =
-        firstNonBlank(
-          obj.optString("portRange"),
-          obj.optString("ports"),
-          obj.optString("port").let { if (it == "0") "" else it },
-        )
-      val password =
-        firstNonBlank(
-          obj.optString("password"),
-          obj.optString("auth"),
-          obj.optString("auth_str"),
-          obj.optString("obfs"),
-          obj.optString("pass"),
-        )
-      val window =
-        obj.optInt("window", obj.optInt("receiveWindow", obj.optInt("recvWindow", 2)))
-          .coerceAtLeast(1)
-      if (host.isEmpty() || password.isEmpty()) return null
-      val flag = obj.optString("flag").trim()
-      val displayName =
-        when {
-          overrideName.isNotEmpty() && flag.isNotEmpty() && !overrideName.contains(flag) ->
-            "$flag $overrideName"
-          overrideName.isNotEmpty() -> overrideName
-          else -> "UDP · $host"
-        }
-      return createUdpServer(
-        name = displayName,
-        host = host,
-        portRange = rawPortRange.ifBlank { "6000-19999" },
-        password = password,
-        receiveWindow = window,
-        isCustom = false,
-      )
-    }
 
     if (protocol == VpnProtocol.SSH) {
       val host =
@@ -351,7 +301,6 @@ object VpnLinkParser {
         if (cleaned.startsWith("vless://", ignoreCase = true) ||
           cleaned.startsWith("vmess://", ignoreCase = true) ||
           cleaned.startsWith("ssh://", ignoreCase = true) ||
-          cleaned.startsWith("udp://", ignoreCase = true) ||
           cleaned.startsWith(ConfigCrypto.LOCKED_SCHEME, ignoreCase = true)
         ) {
           parseUri(cleaned, isCustom = false)
@@ -369,7 +318,6 @@ object VpnLinkParser {
       trimmed.startsWith("vless://", ignoreCase = true) -> parseVless(trimmed, isCustom)
       trimmed.startsWith("vmess://", ignoreCase = true) -> parseVmess(trimmed, isCustom)
       trimmed.startsWith("ssh://", ignoreCase = true) -> parseSsh(trimmed, isCustom)
-      trimmed.startsWith("udp://", ignoreCase = true) -> parseUdp(trimmed, isCustom)
       else -> null
     }
   }
@@ -495,7 +443,6 @@ object VpnLinkParser {
     }
     return when (server.protocol) {
       VpnProtocol.SSH -> toSshUri(server)
-      VpnProtocol.UDP -> toUdpUri(server)
       VpnProtocol.VLESS ->
         if (server.rawUri.trim().startsWith("vless://", ignoreCase = true)) {
           server.rawUri.trim()
@@ -509,69 +456,6 @@ object VpnLinkParser {
           toVmessUri(server)
         }
     }
-  }
-
-  fun sanitizeUdpPortRange(raw: String): Pair<String, Int>? {
-    val cleaned = raw.trim().replace(" ", "")
-    if (cleaned.isEmpty()) return "6000-19999" to 6000
-    val single = cleaned.toIntOrNull()
-    if (single != null) {
-      return if (single in 1..65535) single.toString() to single else null
-    }
-    val parts = cleaned.split("-")
-    if (parts.size == 2) {
-      val start = parts[0].toIntOrNull() ?: return null
-      val end = parts[1].toIntOrNull() ?: return null
-      if (start in 1..65535 && end in 1..65535 && start <= end) {
-        return "$start-$end" to start
-      }
-    }
-    return null
-  }
-
-  fun createUdpServer(
-    name: String,
-    host: String,
-    portRange: String = "6000-19999",
-    password: String,
-    receiveWindow: Int = 2,
-    isCustom: Boolean = true,
-  ): VpnServer {
-    val cleanHost = host.trim()
-    val (cleanRange, firstPort) = sanitizeUdpPortRange(portRange) ?: ("6000-19999" to 6000)
-    val cleanWindow = receiveWindow.coerceIn(1, 64)
-    val displayName = name.trim().ifBlank { "UDP · $cleanHost" }
-    val id = stableId("UDP|$cleanHost|$cleanRange|$password|$cleanWindow")
-    val server =
-      VpnServer(
-        id = id,
-        name = displayName,
-        protocol = VpnProtocol.UDP,
-        address = cleanHost,
-        port = firstPort,
-        network = "udp",
-        tlsMode = "hysteria",
-        password = password,
-        udpPortRange = cleanRange,
-        udpReceiveWindow = cleanWindow,
-        isCustom = isCustom,
-      )
-    return server.copy(rawUri = toUdpUri(server))
-  }
-
-  fun toUdpUri(server: VpnServer): String {
-    val passPart = urlEncode(server.password)
-    val hostPart =
-      if (server.address.contains(":") && !server.address.startsWith("[")) {
-        "[${server.address.trim()}]"
-      } else {
-        server.address.trim()
-      }
-    val range = server.effectiveUdpPortRange
-    val portSuffix = if (range != "6000-19999") ":$range" else ""
-    val window = server.udpReceiveWindow.coerceAtLeast(1)
-    val remarkSuffix = if (server.name.isNotBlank()) "#${urlEncode(server.name)}" else ""
-    return "udp://$passPart@$hostPart$portSuffix?window=$window$remarkSuffix"
   }
 
   private fun toVlessUri(server: VpnServer): String {
@@ -713,66 +597,6 @@ object VpnLinkParser {
         slowDnsServerIp = dnsParam,
         slowDnsNameserver = nsParam,
         slowDnsPublicKey = pubkeyParam,
-        isCustom = isCustom,
-      )
-    return server.copy(rawUri = uri)
-  }
-
-  private fun parseUdp(uri: String, isCustom: Boolean): VpnServer? {
-    val body = uri.substring("udp://".length)
-    val fragmentSplit = body.split("#", limit = 2)
-    val beforeFragment = fragmentSplit[0]
-    val rawRemark = if (fragmentSplit.size > 1) urlDecode(fragmentSplit[1]) else ""
-
-    val querySplit = beforeFragment.split("?", limit = 2)
-    val authority = querySplit[0]
-    val queryStr = if (querySplit.size > 1) querySplit[1] else ""
-    val params = parseQueryParams(queryStr)
-
-    val atIndex = authority.lastIndexOf('@')
-    val password: String
-    val hostPort: String
-    if (atIndex > 0) {
-      password = urlDecode(authority.substring(0, atIndex))
-      hostPort = authority.substring(atIndex + 1).trim()
-    } else {
-      password = params["auth"] ?: params["password"] ?: params["obfs"] ?: ""
-      hostPort = authority.trim()
-    }
-    if (password.isEmpty() || hostPort.isEmpty()) return null
-
-    val (host, rawPortSpec) =
-      if (hostPort.startsWith("[")) {
-        val closeBracket = hostPort.indexOf(']')
-        if (closeBracket <= 1) return null
-        val h = hostPort.substring(1, closeBracket).trim()
-        val rest = hostPort.substring(closeBracket + 1).trim()
-        val p = if (rest.startsWith(":")) rest.substring(1).trim() else ""
-        h to p
-      } else {
-        val colonIdx = hostPort.lastIndexOf(':')
-        if (colonIdx > 0) {
-          hostPort.substring(0, colonIdx).trim() to hostPort.substring(colonIdx + 1).trim()
-        } else {
-          hostPort to ""
-        }
-      }
-    if (host.isEmpty()) return null
-
-    val portSpec = rawPortSpec.ifBlank { params["port"] ?: params["ports"] ?: params["range"] ?: "6000-19999" }
-    val sanitizedRange = sanitizeUdpPortRange(portSpec)?.first ?: return null
-    val window =
-      (params["window"] ?: params["recv_window"] ?: params["receiveWindow"])
-        ?.toIntOrNull()
-        ?.coerceIn(1, 64) ?: 2
-
-    val server =
-      createUdpServer(
-        name = rawRemark,
-        host = host,
-        portRange = sanitizedRange,
-        password = password,
-        receiveWindow = window,
         isCustom = isCustom,
       )
     return server.copy(rawUri = uri)
@@ -1024,8 +848,6 @@ object VpnLinkParser {
           put("slowDnsServerIp", s.slowDnsServerIp)
           put("slowDnsNameserver", s.slowDnsNameserver)
           put("slowDnsPublicKey", s.slowDnsPublicKey)
-          put("udpPortRange", s.udpPortRange)
-          put("udpReceiveWindow", s.udpReceiveWindow)
           put("rawUri", if (s.isLocked && !ConfigCrypto.isLockedUri(s.rawUri)) "" else s.rawUri)
           put("isCustom", s.isCustom)
           put("isLocked", s.isLocked)
@@ -1086,8 +908,6 @@ object VpnLinkParser {
                 slowDnsServerIp = o.optString("slowDnsServerIp", ""),
                 slowDnsNameserver = o.optString("slowDnsNameserver", ""),
                 slowDnsPublicKey = o.optString("slowDnsPublicKey", ""),
-                udpPortRange = o.optString("udpPortRange", "6000-19999").ifBlank { "6000-19999" },
-                udpReceiveWindow = o.optInt("udpReceiveWindow", 2).coerceAtLeast(1),
                 rawUri = if (locked && !ConfigCrypto.isLockedUri(storedRawUri)) "" else storedRawUri,
                 isCustom = o.optBoolean("isCustom", false),
                 isLocked = locked,

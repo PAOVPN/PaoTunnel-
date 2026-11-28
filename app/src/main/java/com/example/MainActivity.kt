@@ -96,16 +96,6 @@ class MainActivity : ComponentActivity() {
               editingServerId = editingId,
             )
           },
-          onAddUdpServer = { name, host, portRange, password, receiveWindow, editingId ->
-            viewModel.addUdpServer(
-              name = name,
-              host = host,
-              portRange = portRange,
-              password = password,
-              receiveWindow = receiveWindow,
-              editingServerId = editingId,
-            )
-          },
           onDeleteCustomServer = { id -> viewModel.deleteCustomServer(id) },
           onShowMessage = { msg -> viewModel.showBannerMessage(msg) },
           onDismissMessage = { viewModel.dismissBannerMessage() },

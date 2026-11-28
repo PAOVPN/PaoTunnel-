@@ -114,7 +114,6 @@ import com.example.ui.theme.SpaceGroteskFamily
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.VioletUdp
 import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.TrafficStats
 import com.example.vpn.model.VpnConnectionState
@@ -152,14 +151,6 @@ fun MainScreen(
     slowDnsServerIp: String,
     slowDnsNameserver: String,
     slowDnsPublicKey: String,
-    editingServerId: String?,
-  ) -> Unit,
-  onAddUdpServer: (
-    name: String,
-    host: String,
-    portRange: String,
-    password: String,
-    receiveWindow: Int,
     editingServerId: String?,
   ) -> Unit,
   onDeleteCustomServer: (String) -> Unit,
@@ -332,7 +323,6 @@ fun MainScreen(
       onDismiss = onCloseImportDialog,
       onImportLink = onImportLink,
       onAddSshServer = onAddSshServer,
-      onAddUdpServer = onAddUdpServer,
       onExportServer = { server -> onOpenExportDialog(server) },
     )
   }
@@ -399,7 +389,7 @@ private fun TopHeaderBar(
           color = TextPrimary,
         )
         Text(
-          text = if (coreAvailable) "Xray · SSH · UDP Ready" else "SSH · UDP Ready",
+          text = if (coreAvailable) "Xray • SSH • SlowDNS Ready" else "SSH • SlowDNS Ready",
           style = MaterialTheme.typography.labelSmall,
           color = if (coreAvailable) EmeraldShield else TextMuted,
         )
@@ -694,17 +684,17 @@ private fun ServerSelectorDropdown(
                         modifier = Modifier.size(17.dp),
                       )
                     }
-                    if (server.protocol == VpnProtocol.SSH || server.protocol == VpnProtocol.UDP) {
+                    if (server.protocol == VpnProtocol.SSH) {
                       IconButton(
                         onClick = {
                           expanded = false
                           onEditServer(server)
                         },
-                        modifier = Modifier.size(36.dp).testTag("dropdown_edit_server_button"),
+                        modifier = Modifier.size(36.dp).testTag("dropdown_edit_ssh_button"),
                       ) {
                         Icon(
                           imageVector = Icons.Rounded.Tune,
-                          contentDescription = "Edit config",
+                          contentDescription = "Edit SSH config",
                           tint = AmberConnecting,
                           modifier = Modifier.size(17.dp),
                         )
@@ -769,7 +759,6 @@ private fun ProtocolBadge(protocol: VpnProtocol) {
       VpnProtocol.VLESS -> CyanPulse
       VpnProtocol.VMESS -> EmeraldShield
       VpnProtocol.SSH -> AmberConnecting
-      VpnProtocol.UDP -> VioletUdp
     }
   val bg = fg.copy(alpha = 0.16f)
   Box(
