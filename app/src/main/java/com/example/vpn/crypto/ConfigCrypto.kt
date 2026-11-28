@@ -1,5 +1,6 @@
 package com.example.vpn.crypto
 
+import androidx.annotation.VisibleForTesting
 import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
@@ -12,7 +13,7 @@ import javax.crypto.spec.SecretKeySpec
 
 /**
  * AES-256-GCM encryption and integrity protection for locked PAO Tunnel configs (`paolock://...`).
- * Uses pure-Kotlin Base64URL encoding/decoding so it runs identically on Android API 24+ and JVM tests.
+ * Secret key material lives exclusively in native C++ (`native-lib.cpp`) via [NativeVault].
  */
 object ConfigCrypto {
 
@@ -24,20 +25,13 @@ object ConfigCrypto {
 
   private val secureRandom = SecureRandom()
 
+  @VisibleForTesting
+  internal var testKeyProvider: (() -> ByteArray)? = null
+
   private val secretKeySpec: SecretKeySpec by lazy {
-    val seedParts =
-      listOf(
-        "PAO-TUNNEL",
-        "CONFIG-VAULT",
-        "AES256-GCM",
-        "MM-SG-TH-2026",
-      )
-    val digest = MessageDigest.getInstance("SHA-256")
-    seedParts.forEach { part ->
-      digest.update(part.toByteArray(StandardCharsets.UTF_8))
-      digest.update(0x1F)
-    }
-    SecretKeySpec(digest.digest(), "AES")
+    val rawKey = testKeyProvider?.invoke() ?: NativeVault.getVaultKey()
+    require(rawKey.size == 32) { "Invalid native vault key length." }
+    SecretKeySpec(rawKey, "AES")
   }
 
   fun isLockedUri(raw: String): Boolean = raw.trim().startsWith(LOCKED_SCHEME, ignoreCase = true)

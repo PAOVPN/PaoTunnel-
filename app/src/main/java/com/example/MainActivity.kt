@@ -51,18 +51,20 @@ class MainActivity : ComponentActivity() {
             }
           }
 
-        val initiateVpnConnect = {
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-              PackageManager.PERMISSION_GRANTED
-          ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-          } else {
-            val prepareIntent = VpnService.prepare(context)
-            if (prepareIntent != null) {
-              vpnPermissionLauncher.launch(prepareIntent)
+        val initiateVpnConnect: () -> Unit = {
+          if (viewModel.verifySecurityBeforeConnect(context)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+              ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+              notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else {
-              viewModel.startSelectedVpn(context)
+              val prepareIntent = VpnService.prepare(context)
+              if (prepareIntent != null) {
+                vpnPermissionLauncher.launch(prepareIntent)
+              } else {
+                viewModel.startSelectedVpn(context)
+              }
             }
           }
         }
@@ -99,6 +101,8 @@ class MainActivity : ComponentActivity() {
           onDeleteCustomServer = { id -> viewModel.deleteCustomServer(id) },
           onShowMessage = { msg -> viewModel.showBannerMessage(msg) },
           onDismissMessage = { viewModel.dismissBannerMessage() },
+          onDismissVersionUpdate = { version -> viewModel.dismissVersionUpdateDialog(version) },
+          onDismissSecurityWarning = { viewModel.dismissSecurityWarning() },
         )
       }
     }

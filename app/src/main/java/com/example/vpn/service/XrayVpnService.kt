@@ -21,6 +21,7 @@ import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
 import com.example.vpn.parser.VpnLinkParser
 import com.example.vpn.parser.XrayConfigBuilder
+import com.example.vpn.security.SecurityGuard
 import com.example.vpn.ssh.SlowDnsManager
 import com.example.vpn.ssh.SshTunnelManager
 import kotlinx.coroutines.CoroutineScope
@@ -108,6 +109,11 @@ class XrayVpnService : VpnService() {
             SlowDnsManager.stop()
             runCatching { vpnInterface?.close() }
             vpnInterface = null
+
+            val threat = SecurityGuard.inspectDevice(applicationContext)
+            if (threat != null) {
+              error(threat.message)
+            }
 
             if (!XrayCoreAdapterImpl.isCoreAvailable) {
               error(

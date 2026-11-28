@@ -3,18 +3,23 @@ package com.example
 import android.content.Context
 import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
+import android.content.pm.PackageInfo
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.parser.VpnLinkParser
 import com.example.vpn.parser.XrayConfigBuilder
+import com.example.vpn.security.SecurityGuard
+import com.example.vpn.security.ThreatType
 import java.nio.charset.StandardCharsets
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -244,5 +249,40 @@ class ExampleRobolectricTest {
     assertEquals(VpnProtocol.VLESS, subServers[0].protocol)
     assertEquals(VpnProtocol.SSH, subServers[1].protocol)
     assertEquals("104.16.0.1:80", subServers[1].sshProxyDisplay)
+  }
+
+  @Test
+  fun `parse remote sync payload extracts version notice and servers`() {
+    val json =
+      """
+      {
+        "version": 2,
+        "notice": "Dtac Free နှင့် StarLink Bypass ဖိုင်အသစ်များ ထည့်ပေးထားပါသည်",
+        "servers": [
+          "vless://11111111-2222-3333-4444-555555555555@sg.example.com:443?encryption=none&security=tls#SG%20Node"
+        ]
+      }
+      """
+        .trimIndent()
+
+    val result = VpnLinkParser.parseRemoteSyncPayload(json)
+    assertEquals(2, result.version)
+    assertEquals("Dtac Free နှင့် StarLink Bypass ဖိုင်အသစ်များ ထည့်ပေးထားပါသည်", result.notice)
+    assertEquals(1, result.servers.size)
+  }
+
+  @Test
+  fun `security guard blocks connection when packet sniffer package is installed`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    assertNull(SecurityGuard.inspectDevice(context))
+
+    val shadowPm = Shadows.shadowOf(context.packageManager)
+    val pkgInfo = PackageInfo().apply { packageName = "com.guoshi.httpcanary" }
+    shadowPm.installPackage(pkgInfo)
+
+    val threat = SecurityGuard.inspectDevice(context)
+    assertNotNull(threat)
+    assertEquals(ThreatType.PACKET_SNIFFER, threat!!.type)
+    assertEquals("Security Warning: Packet Sniffer detected!", threat.message)
   }
 }

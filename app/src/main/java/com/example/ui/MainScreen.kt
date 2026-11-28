@@ -21,6 +21,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,9 +48,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddLink
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Campaign
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.GppBad
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Lock
@@ -61,6 +64,7 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -156,6 +160,8 @@ fun MainScreen(
   onDeleteCustomServer: (String) -> Unit,
   onShowMessage: (String) -> Unit,
   onDismissMessage: () -> Unit,
+  onDismissVersionUpdate: (Int) -> Unit = {},
+  onDismissSecurityWarning: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val snackbarHostState = remember { SnackbarHostState() }
@@ -239,7 +245,20 @@ fun MainScreen(
           onUpdateServers = onUpdateServers,
         )
 
-        Spacer(modifier = Modifier.height(18.dp))
+        // Persistent Remote Announcement / Notice Marquee Banner right under Header
+        AnimatedVisibility(
+          visible = uiState.remoteNotice.isNotBlank(),
+          enter = fadeIn(),
+          exit = fadeOut(),
+        ) {
+          RemoteNoticeMarqueeBanner(
+            notice = uiState.remoteNotice,
+            version = uiState.remoteVersion,
+            modifier = Modifier.padding(top = 12.dp),
+          )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         // 2. Server Selection Dropdown Card
         ServerSelectorDropdown(
@@ -342,6 +361,176 @@ fun MainScreen(
       },
       onShowMessage = onShowMessage,
     )
+  }
+
+  val versionUpdate = uiState.versionUpdateDialog
+  if (versionUpdate != null) {
+    AlertDialog(
+      onDismissRequest = { onDismissVersionUpdate(versionUpdate.version) },
+      containerColor = ElevatedSlateCard,
+      titleContentColor = TextPrimary,
+      textContentColor = TextSecondary,
+      icon = {
+        Icon(
+          imageVector = Icons.Rounded.Campaign,
+          contentDescription = "Server Update Notice",
+          tint = CyanPulse,
+          modifier = Modifier.size(30.dp),
+        )
+      },
+      title = {
+        Text(
+          text = "Server Updated! (Version ${versionUpdate.version})",
+          style = MaterialTheme.typography.titleLarge,
+          color = TextPrimary,
+        )
+      },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          if (versionUpdate.notice.isNotBlank()) {
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = DeepNavySurface,
+              border = BorderStroke(1.dp, CyanPulse.copy(alpha = 0.35f)),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Text(
+                text = versionUpdate.notice,
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextPrimary,
+                modifier = Modifier.padding(12.dp).testTag("version_update_notice_text"),
+              )
+            }
+          }
+          Text(
+            text = "${versionUpdate.serverCount} servers synced and ready to connect.",
+            style = MaterialTheme.typography.labelMedium,
+            color = EmeraldShield,
+          )
+        }
+      },
+      confirmButton = {
+        Button(
+          onClick = { onDismissVersionUpdate(versionUpdate.version) },
+          colors = ButtonDefaults.buttonColors(containerColor = CyanPulse, contentColor = ObsidianBg),
+          modifier = Modifier.testTag("version_update_ok_button"),
+        ) {
+          Text("OK", style = MaterialTheme.typography.labelLarge)
+        }
+      },
+    )
+  }
+
+  val securityWarning = uiState.securityWarning
+  if (securityWarning != null) {
+    AlertDialog(
+      onDismissRequest = onDismissSecurityWarning,
+      containerColor = ElevatedSlateCard,
+      titleContentColor = CoralDisconnect,
+      textContentColor = TextPrimary,
+      icon = {
+        Icon(
+          imageVector = Icons.Rounded.GppBad,
+          contentDescription = securityWarning.title,
+          tint = CoralDisconnect,
+          modifier = Modifier.size(32.dp),
+        )
+      },
+      title = {
+        Text(
+          text = securityWarning.title,
+          style = MaterialTheme.typography.titleLarge,
+          color = CoralDisconnect,
+        )
+      },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            text = securityWarning.message,
+            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+            color = TextPrimary,
+            modifier = Modifier.testTag("security_warning_message"),
+          )
+          if (securityWarning.details.isNotEmpty()) {
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = DeepNavySurface,
+              border = BorderStroke(1.dp, CoralDisconnect.copy(alpha = 0.4f)),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Text(
+                text = securityWarning.details.joinToString("\n") { "• $it" },
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),
+                color = TextSecondary,
+                modifier = Modifier.padding(10.dp),
+              )
+            }
+          }
+        }
+      },
+      confirmButton = {
+        Button(
+          onClick = onDismissSecurityWarning,
+          colors = ButtonDefaults.buttonColors(containerColor = CoralDisconnect, contentColor = ObsidianBg),
+          modifier = Modifier.testTag("security_warning_ok_button"),
+        ) {
+          Text("OK", style = MaterialTheme.typography.labelLarge)
+        }
+      },
+    )
+  }
+}
+
+@Composable
+private fun RemoteNoticeMarqueeBanner(
+  notice: String,
+  version: Int,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    shape = RoundedCornerShape(14.dp),
+    color = DeepNavySurface,
+    border = BorderStroke(1.dp, CyanPulse.copy(alpha = 0.35f)),
+    modifier = modifier.fillMaxWidth().testTag("remote_notice_banner"),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = Icons.Rounded.Campaign,
+        contentDescription = "Server Notice",
+        tint = CyanPulse,
+        modifier = Modifier.size(18.dp),
+      )
+      if (version > 0) {
+        Spacer(modifier = Modifier.width(8.dp))
+        Box(
+          modifier =
+            Modifier.clip(RoundedCornerShape(6.dp))
+              .background(CyanPulse.copy(alpha = 0.16f))
+              .border(1.dp, CyanPulse.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+              .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+          Text(
+            text = "v$version",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),
+            color = CyanPulse,
+          )
+        }
+      }
+      Spacer(modifier = Modifier.width(10.dp))
+      Text(
+        text = notice,
+        style = MaterialTheme.typography.bodyMedium,
+        color = TextPrimary,
+        maxLines = 1,
+        modifier =
+          Modifier.weight(1f)
+            .basicMarquee(iterations = Int.MAX_VALUE, velocity = 42.dp)
+            .testTag("remote_notice_text"),
+      )
+    }
   }
 }
 

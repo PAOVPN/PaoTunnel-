@@ -1,9 +1,12 @@
 package com.example.vpn.data
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -27,6 +30,13 @@ import okhttp3.Request
 
 private val Context.vpnDataStore: DataStore<Preferences> by preferencesDataStore(name = "pao_tunnel_prefs")
 
+data class RemoteUpdateOutcome(
+  val serverCount: Int,
+  val version: Int,
+  val notice: String,
+  val isNewVersion: Boolean,
+)
+
 class ServerRepository(private val context: Context) {
 
   companion object {
@@ -37,6 +47,9 @@ class ServerRepository(private val context: Context) {
     private val KEY_CUSTOM_SERVERS = stringPreferencesKey("custom_servers_json")
     private val KEY_SELECTED_SERVER_ID = stringPreferencesKey("selected_server_id")
     private val KEY_LAST_UPDATED_MS = longPreferencesKey("last_updated_ms")
+    private val KEY_REMOTE_VERSION = intPreferencesKey("remote_version")
+    private val KEY_REMOTE_NOTICE = stringPreferencesKey("remote_notice")
+    private val KEY_LAST_SEEN_VERSION = intPreferencesKey("last_seen_remote_version")
   }
 
   private val httpClient: OkHttpClient =
@@ -67,7 +80,24 @@ class ServerRepository(private val context: Context) {
   val lastUpdatedMsFlow: Flow<Long?> =
     context.vpnDataStore.data.map { prefs -> prefs[KEY_LAST_UPDATED_MS] }
 
-  suspend fun updateServersFromRemote(): Result<Int> =
+  val remoteVersionFlow: Flow<Int> =
+    context.vpnDataStore.data.map { prefs -> prefs[KEY_REMOTE_VERSION] ?: 0 }
+
+  val remoteNoticeFlow: Flow<String> =
+    context.vpnDataStore.data.map { prefs -> prefs[KEY_REMOTE_NOTICE].orEmpty() }
+
+  fun hasInternetConnectivity(): Boolean {
+    return runCatching {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+          ?: return false
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+      }
+      .getOrDefault(false)
+  }
+
+  suspend fun updateServersFromRemote(): Result<RemoteUpdateOutcome> =
     withContext(Dispatchers.IO) {
       runCatching {
         val request =
@@ -85,15 +115,23 @@ class ServerRepository(private val context: Context) {
             response.body?.string().orEmpty()
           }
 
-        val parsed = VpnLinkParser.parseServersPayload(body)
+        val syncResult = VpnLinkParser.parseRemoteSyncPayload(body)
+        val parsed = syncResult.servers
         if (parsed.isEmpty()) {
           error("No valid VLESS, VMess, or SSH servers found in remote servers.json")
         }
 
         val now = System.currentTimeMillis()
+        var isNewVersion = false
         context.vpnDataStore.edit { prefs ->
+          val previousSeenVersion = prefs[KEY_LAST_SEEN_VERSION] ?: 0
+          isNewVersion = syncResult.version > 0 && syncResult.version > previousSeenVersion
+
           prefs[KEY_REMOTE_SERVERS] = VpnLinkParser.toStorageJson(parsed)
           prefs[KEY_LAST_UPDATED_MS] = now
+          prefs[KEY_REMOTE_VERSION] = syncResult.version
+          prefs[KEY_REMOTE_NOTICE] = syncResult.notice
+
           val currentSelected = prefs[KEY_SELECTED_SERVER_ID]
           val customIds =
             VpnLinkParser.fromStorageJson(prefs[KEY_CUSTOM_SERVERS].orEmpty()).map { it.id }.toSet()
@@ -103,9 +141,24 @@ class ServerRepository(private val context: Context) {
             prefs[KEY_SELECTED_SERVER_ID] = parsed.first().id
           }
         }
-        parsed.size
+        RemoteUpdateOutcome(
+          serverCount = parsed.size,
+          version = syncResult.version,
+          notice = syncResult.notice,
+          isNewVersion = isNewVersion,
+        )
       }
     }
+
+  suspend fun markVersionSeen(version: Int) {
+    if (version <= 0) return
+    context.vpnDataStore.edit { prefs ->
+      val current = prefs[KEY_LAST_SEEN_VERSION] ?: 0
+      if (version > current) {
+        prefs[KEY_LAST_SEEN_VERSION] = version
+      }
+    }
+  }
 
   suspend fun selectServer(serverId: String) {
     context.vpnDataStore.edit { prefs -> prefs[KEY_SELECTED_SERVER_ID] = serverId }

@@ -2,6 +2,7 @@ package com.example.vpn.parser
 
 import android.util.Base64
 import com.example.vpn.crypto.ConfigCrypto
+import com.example.vpn.model.RemoteSyncResult
 import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.VpnProtocol
 import com.example.vpn.model.VpnServer
@@ -13,6 +14,40 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object VpnLinkParser {
+
+  fun parseRemoteSyncPayload(payload: String): RemoteSyncResult {
+    val trimmed = payload.trim()
+    val servers = parseServersPayload(trimmed)
+    var version = 0
+    var notice = ""
+    if (trimmed.startsWith("{")) {
+      runCatching {
+        val root = JSONObject(trimmed)
+        version = parseVersionNumber(root)
+        notice =
+          firstNonBlank(
+            root.optString("notice"),
+            root.optString("announcement"),
+            root.optString("message"),
+          )
+      }
+    }
+    return RemoteSyncResult(
+      servers = servers,
+      version = version,
+      notice = notice,
+    )
+  }
+
+  private fun parseVersionNumber(root: JSONObject): Int {
+    if (!root.has("version")) return 0
+    val rawVal = root.opt("version")
+    return when (rawVal) {
+      is Number -> rawVal.toInt().coerceAtLeast(0)
+      is String -> rawVal.trim().removePrefix("v").removePrefix("V").toIntOrNull()?.coerceAtLeast(0) ?: 0
+      else -> 0
+    }
+  }
 
   fun parseServersPayload(payload: String): List<VpnServer> {
     val trimmed = payload.trim()

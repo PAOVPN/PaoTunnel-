@@ -6,12 +6,26 @@ import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.PushbackInputStream
 import java.nio.charset.StandardCharsets
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class ExampleUnitTest {
+
+  @Before
+  fun setUpTestVaultKey() {
+    com.example.vpn.crypto.ConfigCrypto.testKeyProvider = {
+      ByteArray(32) { idx -> ((idx * 13 + 7) and 0xFF).toByte() }
+    }
+  }
+
+  @After
+  fun tearDownTestVaultKey() {
+    com.example.vpn.crypto.ConfigCrypto.testKeyProvider = null
+  }
 
   @Test
   fun formatPayload_translatesAllNetModTagsAndEscapes() {
@@ -257,5 +271,14 @@ class ExampleUnitTest {
     assertEquals("://ns1.example.com", decrypted.slowDnsNameserver)
     assertEquals(pubKey, decrypted.slowDnsPublicKey)
     assertEquals("SlowDNS • Protected Config", decrypted.homeDisplaySubtitle)
+  }
+
+  @Test
+  fun securityGuard_monitorsAllRequiredPacketSnifferPackages() {
+    val monitored = com.example.vpn.security.SecurityGuard.SNIFFER_PACKAGES.keys
+    assertTrue(monitored.contains("com.guoshi.httpcanary"))
+    assertTrue(monitored.contains("com.emanuelef.remote_capture"))
+    assertTrue(monitored.contains("app.greyshirts.sslcapture"))
+    assertTrue(monitored.contains("com.minhui.networkcapture"))
   }
 }

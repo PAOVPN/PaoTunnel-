@@ -127,3 +127,11 @@ data class VpnRuntimeState(
   val errorMessage: String? = null,
   val coreAvailable: Boolean = true,
 )
+
+@Immutable
+data class RemoteSyncResult(
+  val servers: List<VpnServer>,
+  val version: Int = 0,
+  val notice: String = "",
+)
+

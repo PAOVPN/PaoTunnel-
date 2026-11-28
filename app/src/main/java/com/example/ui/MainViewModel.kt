@@ -10,6 +10,8 @@ import com.example.vpn.model.SshTunnelMode
 import com.example.vpn.model.VpnConnectionState
 import com.example.vpn.model.VpnRuntimeState
 import com.example.vpn.model.VpnServer
+import com.example.vpn.security.SecurityGuard
+import com.example.vpn.security.SecurityThreat
 import com.example.vpn.service.VpnStateHolder
 import com.example.vpn.service.XrayVpnService
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +23,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @Immutable
+data class VersionUpdateNotice(
+  val version: Int,
+  val notice: String,
+  val serverCount: Int,
+)
+
+@Immutable
 data class MainUiState(
   val servers: List<VpnServer> = emptyList(),
   val selectedServer: VpnServer? = null,
@@ -28,6 +37,10 @@ data class MainUiState(
   val isUpdatingServers: Boolean = false,
   val isPinging: Boolean = false,
   val lastUpdatedMs: Long? = null,
+  val remoteVersion: Int = 0,
+  val remoteNotice: String = "",
+  val versionUpdateDialog: VersionUpdateNotice? = null,
+  val securityWarning: SecurityThreat? = null,
   val statusBannerMessage: String? = null,
   val showImportDialog: Boolean = false,
   val editingServer: VpnServer? = null,
@@ -41,6 +54,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   private data class TransientUiState(
     val isUpdatingServers: Boolean = false,
     val isPinging: Boolean = false,
+    val versionUpdateDialog: VersionUpdateNotice? = null,
+    val securityWarning: SecurityThreat? = null,
     val statusBannerMessage: String? = null,
     val showImportDialog: Boolean = false,
     val editingServer: VpnServer? = null,
@@ -49,14 +64,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
   private val transientState = MutableStateFlow(TransientUiState())
 
+  private val syncMetadataFlow =
+    combine(
+      repository.lastUpdatedMsFlow,
+      repository.remoteVersionFlow,
+      repository.remoteNoticeFlow,
+    ) { lastUpdatedMs, version, notice ->
+      Triple(lastUpdatedMs, version, notice)
+    }
+
   val uiState: StateFlow<MainUiState> =
     combine(
         repository.allServersFlow,
         repository.selectedServerIdFlow,
-        repository.lastUpdatedMsFlow,
+        syncMetadataFlow,
         VpnStateHolder.state,
         transientState,
-      ) { servers, selectedId, lastUpdatedMs, runtime, transient ->
+      ) { servers, selectedId, syncMeta, runtime, transient ->
         val selected = servers.firstOrNull { it.id == selectedId } ?: servers.firstOrNull()
         MainUiState(
           servers = servers,
@@ -64,7 +88,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           runtimeState = runtime,
           isUpdatingServers = transient.isUpdatingServers,
           isPinging = transient.isPinging,
-          lastUpdatedMs = lastUpdatedMs,
+          lastUpdatedMs = syncMeta.first,
+          remoteVersion = syncMeta.second,
+          remoteNotice = syncMeta.third,
+          versionUpdateDialog = transient.versionUpdateDialog,
+          securityWarning = transient.securityWarning,
           statusBannerMessage = transient.statusBannerMessage,
           showImportDialog = transient.showImportDialog,
           editingServer = transient.editingServer,
@@ -77,17 +105,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = MainUiState(runtimeState = VpnStateHolder.state.value),
       )
 
+  init {
+    autoSyncOnLaunch()
+  }
+
+  private fun autoSyncOnLaunch() {
+    viewModelScope.launch {
+      val currentConnection = VpnStateHolder.state.value.connectionState
+      if (currentConnection != VpnConnectionState.DISCONNECTED &&
+        currentConnection != VpnConnectionState.ERROR
+      ) {
+        return@launch
+      }
+      if (!repository.hasInternetConnectivity()) {
+        return@launch
+      }
+      if (transientState.value.isUpdatingServers) return@launch
+
+      transientState.update { it.copy(isUpdatingServers = true) }
+      repository
+        .updateServersFromRemote()
+        .onSuccess { outcome ->
+          transientState.update { state ->
+            state.copy(
+              isUpdatingServers = false,
+              versionUpdateDialog =
+                if (outcome.isNewVersion) {
+                  VersionUpdateNotice(
+                    version = outcome.version,
+                    notice = outcome.notice,
+                    serverCount = outcome.serverCount,
+                  )
+                } else {
+                  state.versionUpdateDialog
+                },
+            )
+          }
+        }
+        .onFailure {
+          // Offline / unreachable: silently continue using cached local servers
+          transientState.update { it.copy(isUpdatingServers = false) }
+        }
+    }
+  }
+
   fun updateServers() {
     if (transientState.value.isUpdatingServers) return
     viewModelScope.launch {
       transientState.update { it.copy(isUpdatingServers = true, statusBannerMessage = null) }
       repository
         .updateServersFromRemote()
-        .onSuccess { count ->
-          transientState.update {
-            it.copy(
+        .onSuccess { outcome ->
+          transientState.update { state ->
+            state.copy(
               isUpdatingServers = false,
-              statusBannerMessage = "Updated $count servers from repository.",
+              statusBannerMessage = "Updated ${outcome.serverCount} servers from repository.",
+              versionUpdateDialog =
+                if (outcome.isNewVersion) {
+                  VersionUpdateNotice(
+                    version = outcome.version,
+                    notice = outcome.notice,
+                    serverCount = outcome.serverCount,
+                  )
+                } else {
+                  state.versionUpdateDialog
+                },
             )
           }
         }
@@ -102,6 +184,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
+  fun dismissVersionUpdateDialog(version: Int) {
+    transientState.update { it.copy(versionUpdateDialog = null) }
+    viewModelScope.launch { repository.markVersionSeen(version) }
+  }
+
+  fun verifySecurityBeforeConnect(context: Context): Boolean {
+    val threat = SecurityGuard.inspectDevice(context.applicationContext) ?: return true
+    transientState.update {
+      it.copy(
+        securityWarning = threat,
+        statusBannerMessage = threat.message,
+      )
+    }
+    return false
+  }
+
+  fun dismissSecurityWarning() {
+    transientState.update { it.copy(securityWarning = null) }
+  }
+
   fun selectServer(server: VpnServer, context: Context) {
     viewModelScope.launch {
       repository.selectServer(server.id)
@@ -109,6 +211,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
       if (currentRuntime.connectionState == VpnConnectionState.CONNECTED &&
         currentRuntime.activeServerId != server.id
       ) {
+        if (!verifySecurityBeforeConnect(context)) {
+          XrayVpnService.stopVpn(context.applicationContext)
+          return@launch
+        }
         XrayVpnService.startVpn(context.applicationContext, server)
       }
     }
@@ -247,6 +353,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun startSelectedVpn(context: Context) {
+    if (!verifySecurityBeforeConnect(context)) {
+      return
+    }
     val server = uiState.value.selectedServer
     if (server == null) {
       transientState.update {
